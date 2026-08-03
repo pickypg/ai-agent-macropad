@@ -4,7 +4,8 @@ A daemon that mirrors the state of your Claude Code sessions onto an
 [Adafruit MacroPad RP2040](https://www.adafruit.com/product/5100) — one
 key/LED slot per active session, color-coded by what that session is
 doing (working, waiting on you, done, errored, etc.), with the OLED
-showing a label per slot.
+showing a label per slot — pressing a key brings that session's window
+(Terminal, VS Code, or IntelliJ) to the front.
 
 This repo covers the full path end to end: an example Claude Code
 `settings.json` wiring plus the hook script it invokes, a host-side
