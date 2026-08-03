@@ -216,3 +216,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Claude Code project settings
+.claude/
+
+# Daemon runtime state (socket, logs) — created under ~/.claude-macropad,
+# never actually inside the repo, but excluded defensively in case
+# CONFIG_DIR is ever pointed here during local testing.
+*.sock
+events.log
+
+# QMK build output — `qmk compile` copies the final firmware image
+# into the userspace dir itself (intermediate .build/ objects stay in
+# the separate nuphy-qmk-firmware checkout, untracked here either way).
+qmk-userspace/*.bin
+qmk-userspace/*.hex
+qmk-userspace/*.uf2
