@@ -99,7 +99,9 @@ available and optional, but recommended for protecting the board.
    if it isn't already).
 2. From the [Adafruit CircuitPython Library
    Bundle](https://circuitpython.org/libraries) matching your device's
-   CircuitPython version, copy these into `CIRCUITPY/lib`:
+   CircuitPython version, copy these into `CIRCUITPY/lib` (or just copy
+   the entire CircuitPython `lib` directory over, which takes a long
+   time):
    - `adafruit_macropad`
    - `adafruit_display_text`
    - `adafruit_debouncer`
