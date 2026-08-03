@@ -166,48 +166,63 @@ def send(obj):
 
 # --- Main loop -----------------------------------------------------------
 
-last_encoder_pos = macropad.encoder
-last_switch_pressed = False
-
+# Module-level (not main()-local) since handle_message() reads blink_on
+# directly on every "slot" message, not just from inside the loop below.
 blink_on = True
 last_blink_toggle = time.monotonic()
 
-macropad.pixels.brightness = 0.3
-redraw()
 
-while True:
-    # host -> device
-    for msg in read_json_lines():
-        handle_message(msg)
+def main():
+    # Guarded by `if __name__ == "__main__"` below so this file can be
+    # imported (e.g. by tests, with the usb_cdc/adafruit_macropad
+    # imports above swapped for fakes) without running forever — on the
+    # board, CircuitPython still runs code.py as __main__, so behavior
+    # there is unchanged.
+    global blink_on, last_blink_toggle
 
-    # blink slots in a BLINK_STATES state — toggles blink_on on a fixed
-    # period and repaints only those slots, so handle_message's initial
-    # paint (always "on") and this loop agree via the same pixel_color()
-    # helper instead of duplicating the on/off decision.
-    now = time.monotonic()
-    if now - last_blink_toggle >= BLINK_PERIOD:
-        blink_on = not blink_on
-        last_blink_toggle = now
-        for i, slot in enumerate(slots):
-            if slot["state"] in BLINK_STATES:
-                macropad.pixels[i] = pixel_color(slot["state"], blink_on)
+    last_encoder_pos = macropad.encoder
+    last_switch_pressed = False
 
-    # device -> host: keypresses
-    event = macropad.keys.events.get()
-    if event and event.pressed:
-        send({"t": "key", "i": event.key_number})
+    macropad.pixels.brightness = 0.3
+    redraw()
 
-    # device -> host: encoder rotation
-    pos = macropad.encoder
-    if pos != last_encoder_pos:
-        send({"t": "enc", "d": pos - last_encoder_pos})
-        last_encoder_pos = pos
+    while True:
+        # host -> device
+        for msg in read_json_lines():
+            handle_message(msg)
 
-    # device -> host: encoder click
-    macropad.encoder_switch_debounced.update()
-    pressed = macropad.encoder_switch_debounced.pressed
-    if pressed and not last_switch_pressed:
-        send({"t": "enc_click"})
-    last_switch_pressed = pressed
+        # blink slots in a BLINK_STATES state — toggles blink_on on a fixed
+        # period and repaints only those slots, so handle_message's initial
+        # paint (always "on") and this loop agree via the same pixel_color()
+        # helper instead of duplicating the on/off decision.
+        now = time.monotonic()
+        if now - last_blink_toggle >= BLINK_PERIOD:
+            blink_on = not blink_on
+            last_blink_toggle = now
+            for i, slot in enumerate(slots):
+                if slot["state"] in BLINK_STATES:
+                    macropad.pixels[i] = pixel_color(slot["state"], blink_on)
 
-    time.sleep(0.01)
+        # device -> host: keypresses
+        event = macropad.keys.events.get()
+        if event and event.pressed:
+            send({"t": "key", "i": event.key_number})
+
+        # device -> host: encoder rotation
+        pos = macropad.encoder
+        if pos != last_encoder_pos:
+            send({"t": "enc", "d": pos - last_encoder_pos})
+            last_encoder_pos = pos
+
+        # device -> host: encoder click
+        macropad.encoder_switch_debounced.update()
+        pressed = macropad.encoder_switch_debounced.pressed
+        if pressed and not last_switch_pressed:
+            send({"t": "enc_click"})
+        last_switch_pressed = pressed
+
+        time.sleep(0.01)
+
+
+if __name__ == "__main__":
+    main()

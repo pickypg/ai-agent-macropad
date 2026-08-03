@@ -23,6 +23,8 @@ hasn't been tried.
 | `daemon.py` | Host-side daemon: Unix socket server + serial link to the pad |
 | `fake_hooks.py` | Simulates a Claude Code session's hook events, for testing the daemon without real hooks wired up |
 | `requirements.txt` | Python dependencies for the daemon |
+| `requirements-dev.txt` | Adds `pytest` on top of `requirements.txt`, for running the test suite |
+| `tests/` | `pytest` suite for `daemon.py` and `rp2040/code.py` (see [Testing](#testing)) |
 | `rp2040/boot.py` | Enables the USB serial data endpoint (runs on device boot) — copied onto the MacroPad's CIRCUITPY drive |
 | `rp2040/code.py` | Main device loop: renders pad state, reads key/encoder input — copied onto the MacroPad's CIRCUITPY drive |
 | `claude/example_hook_settings.json` | `hooks` block to merge into `settings.json`, wiring every relevant event to `hook.sh` |
@@ -175,6 +177,28 @@ It fails open by design (redirects `nc`'s output away, always exits 0)
 so a daemon that isn't running never blocks a tool call or a session,
 and caps the socket write at one second so `PreToolUse`/`PostToolUse` —
 which fire on every tool call — stay fast.
+
+## Testing
+
+```
+pip install -r requirements-dev.txt
+python3 -m pytest
+```
+
+All tests run against fakes — no real serial port, socket, or
+hardware needed:
+
+- `daemon.py`'s logic (`hook_to_state`, `SlotManager`, `Daemon.handle_hook_event`,
+  stall escalation, port `discover_port()`, window-dispatch fallthrough)
+  is tested directly, with `serial.Serial`, `subprocess.run`, and
+  `PadLink.write_json` swapped for recording fakes via `monkeypatch`.
+- `rp2040/code.py`'s protocol/state logic (`read_json_lines`,
+  `handle_message`, `redraw`, `pixel_color`) is tested by importing the
+  file with its CircuitPython-only imports (`usb_cdc`, `displayio`,
+  `adafruit_macropad`, ...) swapped for minimal fakes — see the `pad`
+  fixture in `tests/conftest.py`. Its `while True` main loop is behind
+  `def main(): ... if __name__ == "__main__": main()`, so importing it
+  for tests doesn't hang the way running it as a script would.
 
 ## Protocol
 
