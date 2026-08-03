@@ -11,6 +11,11 @@ This repo covers the full path end to end: an example Claude Code
 daemon that speaks a small JSON protocol with the MacroPad over USB
 serial, and the CircuitPython code that runs on the device itself.
 
+**Only tested on macOS.** Window-dispatch (tmux/Terminal.app/VS
+Code/IntelliJ activation) uses AppleScript and is macOS-only outright;
+the rest (daemon, hook.sh, serial protocol) may work elsewhere but
+hasn't been tried.
+
 ## Repo layout
 
 ```
