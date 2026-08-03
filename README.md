@@ -11,6 +11,8 @@ This repo covers the full path end to end: an example Claude Code
 daemon that speaks a small JSON protocol with the MacroPad over USB
 serial, and the CircuitPython code that runs on the device itself.
 
+![MacroPad in action example](./macropad.png)
+
 **Only tested on macOS.** Window-dispatch (tmux/Terminal.app/VS
 Code/IntelliJ activation) uses AppleScript and is macOS-only outright;
 the rest (daemon, hook.sh, serial protocol) may work elsewhere but
@@ -18,22 +20,22 @@ hasn't been tried.
 
 ## Repo layout
 
-| Path | Description |
-|---|---|
-| `daemon.py` | Host-side daemon: Unix socket server + serial link to the pad |
-| `fake_hooks.py` | Simulates a Claude Code session's hook events, for testing the daemon without real hooks wired up |
-| `requirements.txt` | Python dependencies for the daemon |
-| `requirements-dev.txt` | Adds `pytest` on top of `requirements.txt`, for running the test suite |
-| `tests/` | `pytest` suite for `daemon.py` and `rp2040/code.py` (see [Testing](#testing)) |
-| `rp2040/boot.py` | Enables the USB serial data endpoint (runs on device boot) — copied onto the MacroPad's CIRCUITPY drive |
-| `rp2040/code.py` | Main device loop: renders pad state, reads key/encoder input — copied onto the MacroPad's CIRCUITPY drive |
-| `claude/example_hook_settings.json` | `hooks` block to merge into `settings.json`, wiring every relevant event to `hook.sh` |
-| `claude/hook.sh` | Reads a hook payload from stdin, enriches it, and forwards it to the daemon's socket |
+| Path                                | Description                                                                                               |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `daemon.py`                         | Host-side daemon: Unix socket server + serial link to the pad                                             |
+| `fake_hooks.py`                     | Simulates a Claude Code session's hook events, for testing the daemon without real hooks wired up         |
+| `requirements.txt`                  | Python dependencies for the daemon                                                                        |
+| `requirements-dev.txt`              | Adds `pytest` on top of `requirements.txt`, for running the test suite                                    |
+| `tests/`                            | `pytest` suite for `daemon.py` and `rp2040/code.py` (see [Testing](#testing))                             |
+| `rp2040/boot.py`                    | Enables the USB serial data endpoint (runs on device boot) — copied onto the MacroPad's CIRCUITPY drive   |
+| `rp2040/code.py`                    | Main device loop: renders pad state, reads key/encoder input — copied onto the MacroPad's CIRCUITPY drive |
+| `claude/example_hook_settings.json` | `hooks` block to merge into `settings.json`, wiring every relevant event to `hook.sh`                     |
+| `claude/hook.sh`                    | Reads a hook payload from stdin, enriches it, and forwards it to the daemon's socket                      |
 
 ## How it fits together
 
 ```
-Claude Code hooks  --hook.sh-->  daemon.py  <--USB serial-->  MacroPad RP2040
+Claude Code hooks --> hook.sh -->   daemon.py    <-- USB serial --> MacroPad RP2040
                                   (Unix socket)
 ```
 
@@ -48,14 +50,14 @@ presses, encoder turns) and logs them.
 Each slot's NeoPixel color reflects that session's current state, per
 `STATE_COLORS` in [`rp2040/code.py`](rp2040/code.py):
 
-| | Label | Color | Internal state | When |
-|---|---|---|---|---|
-| ⚪ | idle | dim gray `#282828` | `idle` | `SessionStart` — slot allocated, nothing happening yet |
-| 🔵 | thinking | blue `#0000FF` | `working` | A prompt was submitted or a tool is running (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`) |
-| 🟢 | complete | green `#00FF00` | `done` | `Stop` — Claude finished responding |
-| 🟠 | needs input | orange `#FF7F00`, blinking | `question` | Blocked on you: `AskUserQuestion`, `ExitPlanMode`, `PermissionRequest`, or `Notification:agent_needs_input` |
-| 🟡 | waiting | amber `#FFAA00` | `waiting` | Claude's been idle 60s+ with nothing blocking (`Notification:idle_prompt`) — lower urgency than "needs input" |
-| 🔴 | error | red `#FF0000` | `error` | `PostToolUseFailure` |
+|     | Label       | Color                      | Internal state | When                                                                                                          |
+| --- | ----------- | -------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------- |
+| ⚪  | idle        | dim gray `#282828`         | `idle`         | `SessionStart` — slot allocated, nothing happening yet                                                        |
+| 🔵  | thinking    | blue `#0000FF`             | `working`      | A prompt was submitted or a tool is running (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`)                 |
+| 🟢  | complete    | green `#00FF00`            | `done`         | `Stop` — Claude finished responding                                                                           |
+| 🟠  | needs input | orange `#FF7F00`, blinking | `question`     | Blocked on you: `AskUserQuestion`, `ExitPlanMode`, `PermissionRequest`, or `Notification:agent_needs_input`   |
+| 🟡  | waiting     | amber `#FFAA00`            | `waiting`      | Claude's been idle 60s+ with nothing blocking (`Notification:idle_prompt`) — lower urgency than "needs input" |
+| 🔴  | error       | red `#FF0000`              | `error`        | `PostToolUseFailure`                                                                                          |
 
 "needs input" blinks (0.5s on/off, `BLINK_PERIOD` in `rp2040/code.py`)
 so it reads as distinct from "waiting" at a glance despite the two
@@ -136,7 +138,7 @@ on carrier-detect and can hang `pyserial`'s `Serial()` open call until
 the board is unplugged.
 
 If no pad is found (and `MACROPAD_SERIAL_PORT` isn't set), the daemon
-still runs — it just logs what it *would* send instead of writing to a
+still runs — it just logs what it _would_ send instead of writing to a
 port. This lets you develop against the socket/slot-mapping logic
 without the hardware plugged in.
 
@@ -196,7 +198,7 @@ its own:
   inside tmux).
 - `controlling_tty`, at `SessionStart` only: Claude Code runs hook
   commands detached with no controlling terminal, so the script instead
-  reads the *parent* process's tty via `ps -o tty= -p "$PPID"` — the
+  reads the _parent_ process's tty via `ps -o tty= -p "$PPID"` — the
   process Claude Code actually spawned still has one.
 
 It fails open by design (redirects `nc`'s output away, always exits 0)
@@ -234,28 +236,28 @@ Each line written to `~/.claude-macropad.sock` is a single JSON object
 with (at minimum) `hook_event_name` and `session_id`, matching the shape
 of a Claude Code hook payload. Recognized fields:
 
-| Field | Used for |
-|---|---|
-| `hook_event_name` | Selects the resulting pad state (see below) |
-| `session_id` | Identifies which pad slot this event belongs to |
-| `cwd` | Project folder name, used as the slot's OLED label |
-| `tool_name` | Distinguishes attention-worthy tools (`AskUserQuestion`, `ExitPlanMode`) and labels the slot during `PreToolUse` |
-| `notification_type` | Distinguishes `Notification` subtypes (`agent_needs_input`, `idle_prompt`, ...) |
-| `tmux_pane` | tmux pane id, for the "bring to front" key-press dispatch |
-| `controlling_tty` | Terminal.app tty, for the same dispatch when not in tmux |
+| Field               | Used for                                                                                                         |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `hook_event_name`   | Selects the resulting pad state (see below)                                                                      |
+| `session_id`        | Identifies which pad slot this event belongs to                                                                  |
+| `cwd`               | Project folder name, used as the slot's OLED label                                                               |
+| `tool_name`         | Distinguishes attention-worthy tools (`AskUserQuestion`, `ExitPlanMode`) and labels the slot during `PreToolUse` |
+| `notification_type` | Distinguishes `Notification` subtypes (`agent_needs_input`, `idle_prompt`, ...)                                  |
+| `tmux_pane`         | tmux pane id, for the "bring to front" key-press dispatch                                                        |
+| `controlling_tty`   | Terminal.app tty, for the same dispatch when not in tmux                                                         |
 
 `hook_event_name` maps to a display state roughly as:
 
-| Event | State |
-|---|---|
-| `SessionStart` | `idle` |
-| `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | `working` |
-| `PreToolUse` with `AskUserQuestion`/`ExitPlanMode`, or `PermissionRequest` | `question` |
-| `PostToolUseFailure` | `error` |
-| `Stop` | `done` |
-| `Notification` (`agent_needs_input`) | `question` |
-| `Notification` (`idle_prompt`) | `waiting` |
-| `SessionEnd` | slot cleared |
+| Event                                                                      | State        |
+| -------------------------------------------------------------------------- | ------------ |
+| `SessionStart`                                                             | `idle`       |
+| `UserPromptSubmit`, `PreToolUse`, `PostToolUse`                            | `working`    |
+| `PreToolUse` with `AskUserQuestion`/`ExitPlanMode`, or `PermissionRequest` | `question`   |
+| `PostToolUseFailure`                                                       | `error`      |
+| `Stop`                                                                     | `done`       |
+| `Notification` (`agent_needs_input`)                                       | `question`   |
+| `Notification` (`idle_prompt`)                                             | `waiting`    |
+| `SessionEnd`                                                               | slot cleared |
 
 A `PreToolUse` with no matching `PostToolUse`/`PostToolUseFailure` within
 `STALL_THRESHOLD_SECONDS` (default 10s) is escalated to `question` as a
