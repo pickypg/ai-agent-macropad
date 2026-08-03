@@ -61,6 +61,32 @@ Each slot's NeoPixel color reflects that session's current state, per
 so it reads as distinct from "waiting" at a glance despite the two
 sharing a similarly warm color.
 
+## Hardware
+
+Beyond the [MacroPad RP2040](https://www.adafruit.com/product/5100)
+board itself, getting a fully functional pad requires:
+
+1. **The base board** (linked above).
+2. **12 MX-compatible mechanical switches, with RGB support.** This
+   project is built on Cherry MX Red RGB switches. Get RGB-capable
+   switches specifically — without them, the [color-coded states above](#pad-states)
+   have nowhere to show, and the pad's usefulness drops to just the
+   OLED text and window-selection on keypress.
+3. **12 MX-compatible keycaps** (technically optional — the switches
+   work bare). To actually see the color, the keycaps need to
+   shine-through (translucent), not opaque.
+4. **A USB-C cable that carries data, not just power.** A lot of
+   USB-C cables are charge-only; the daemon's serial link needs one
+   that actually supports data transfer.
+
+If you can get the [MacroPad RP2040 Starter
+Kit](https://www.adafruit.com/product/5128), it bundles the board, RGB
+switches, and keycaps together — the simplest path when it's in stock.
+
+Otherwise, buy the bare-bones board, switches, and keycaps separately.
+An [acrylic enclosure](https://www.adafruit.com/product/5103) is also
+available and optional, but recommended for protecting the board.
+
 ## Setup
 
 ### 1. Flash the MacroPad
