@@ -56,13 +56,13 @@ Each slot's NeoPixel color reflects that session's current state, per
 | ⚪ | idle | dim gray `#282828` | `idle` | `SessionStart` — slot allocated, nothing happening yet |
 | 🔵 | thinking | blue `#0000FF` | `working` | A prompt was submitted or a tool is running (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`) |
 | 🟢 | complete | green `#00FF00` | `done` | `Stop` — Claude finished responding |
-| 🟠 | needs input | orange `#FF7F00` | `question` | Blocked on you: `AskUserQuestion`, `ExitPlanMode`, `PermissionRequest`, or `Notification:agent_needs_input`. Blinks on the pad. |
+| 🟠 | needs input | orange `#FF7F00`, blinking | `question` | Blocked on you: `AskUserQuestion`, `ExitPlanMode`, `PermissionRequest`, or `Notification:agent_needs_input` |
 | 🟡 | waiting | amber `#FFAA00` | `waiting` | Claude's been idle 60s+ with nothing blocking (`Notification:idle_prompt`) — lower urgency than "needs input" |
 | 🔴 | error | red `#FF0000` | `error` | `PostToolUseFailure` |
 
-("needs input" and "waiting" render as similarly warm colors on the
-actual LEDs — the blink on "needs input" is what visually sets them
-apart at a glance.)
+"needs input" blinks (0.5s on/off, `BLINK_PERIOD` in `rp2040/code.py`)
+so it reads as distinct from "waiting" at a glance despite the two
+sharing a similarly warm color.
 
 ## Setup
 

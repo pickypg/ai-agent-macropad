@@ -52,6 +52,12 @@ STATE_COLORS = {
     "off":      (0, 0, 0),
 }
 
+# States that blink rather than show a solid color — just "question" for
+# now, so it reads as distinct from "waiting" at a glance despite the two
+# sharing a similarly warm color.
+BLINK_STATES = {"question"}
+BLINK_PERIOD = 0.5  # seconds per on/off phase
+
 # Per-slot state, kept so we can redraw the OLED without re-parsing
 # everything on every loop.
 slots = [{"state": "idle", "label": ""} for _ in range(NUM_SLOTS)]
@@ -80,6 +86,16 @@ def redraw():
             break  # paging past NUM_SLOTS visible rows is a Phase 6 problem
         text = "{}:{:<4} {}".format(i, slot["state"][:4], slot["label"])
         label_rows[i].text = text[:21]  # rough character budget for the width
+
+
+def pixel_color(state, blink_on):
+    """Color a slot's NeoPixel should show right now for the given
+    state, factoring in the current blink phase for BLINK_STATES so
+    handle_message() and the main loop's blink toggle agree on what
+    "on" looks like without duplicating the logic."""
+    if state in BLINK_STATES and not blink_on:
+        return STATE_COLORS["off"]
+    return STATE_COLORS.get(state, STATE_COLORS["off"])
 
 
 # --- Line-buffered read from usb_cdc.data -----------------------------
@@ -119,7 +135,7 @@ def handle_message(msg):
         slots[i]["state"] = msg.get("state", slots[i]["state"])
         if "label" in msg:
             slots[i]["label"] = msg["label"]
-        macropad.pixels[i] = STATE_COLORS.get(slots[i]["state"], (0, 0, 0))
+        macropad.pixels[i] = pixel_color(slots[i]["state"], blink_on)
         redraw()
 
     elif t == "clear":
@@ -153,6 +169,9 @@ def send(obj):
 last_encoder_pos = macropad.encoder
 last_switch_pressed = False
 
+blink_on = True
+last_blink_toggle = time.monotonic()
+
 macropad.pixels.brightness = 0.3
 redraw()
 
@@ -160,6 +179,18 @@ while True:
     # host -> device
     for msg in read_json_lines():
         handle_message(msg)
+
+    # blink slots in a BLINK_STATES state — toggles blink_on on a fixed
+    # period and repaints only those slots, so handle_message's initial
+    # paint (always "on") and this loop agree via the same pixel_color()
+    # helper instead of duplicating the on/off decision.
+    now = time.monotonic()
+    if now - last_blink_toggle >= BLINK_PERIOD:
+        blink_on = not blink_on
+        last_blink_toggle = now
+        for i, slot in enumerate(slots):
+            if slot["state"] in BLINK_STATES:
+                macropad.pixels[i] = pixel_color(slot["state"], blink_on)
 
     # device -> host: keypresses
     event = macropad.keys.events.get()
