@@ -225,10 +225,12 @@ which fire on every tool call — stay fast.
 
 ### 5. (In progress) Build the NuPhy Air75 V2 keymap
 
-See `qmk-air75v2-implementation-plan.md` for the full plan — not yet flashable/functional
-end-to-end (Phase 4/6 still in progress). The keymap source lives in this repo under
-`qmk-userspace/` (a [QMK userspace overlay](https://docs.qmk.fm/newbs_external_userspace)), built
-against a separate local QMK checkout that isn't part of this repo:
+See `qmk-air75v2-implementation-plan.md` for the full plan — the keymap itself (4 slots so far:
+PageUp/PageDn/Home/End, each showing one Claude Code session's state via per-key RGB) compiles
+clean, but is not yet verified against real hardware (Phase 6 still open). The keymap source
+lives in this repo under `qmk-userspace/` (a [QMK userspace
+overlay](https://docs.qmk.fm/newbs_external_userspace)), built against a separate local QMK
+checkout that isn't part of this repo:
 
 ```
 git clone --branch nuphy-keyboards https://github.com/nuphy-src/qmk_firmware.git ../nuphy-qmk-firmware

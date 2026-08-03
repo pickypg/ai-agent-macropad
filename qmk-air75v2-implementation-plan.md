@@ -249,7 +249,7 @@ sections updated. 95/95 tests passing.
 
 ---
 
-## Phase 4 — NuPhy Air75 V2 keymap — in progress (userspace scaffold done)
+## Phase 4 — NuPhy Air75 V2 keymap — ✅ Done 2026-08-03 (unverified against real hardware)
 
 - ~~Create `keyboards/nuphy/air75_v2/ansi/keymaps/claude_macropad/keymap.c` in NuPhy's fork~~.
   **Superseded**: rather than forking `nuphy-src/qmk_firmware` (285MB+, several hundred MB more in
@@ -275,17 +275,43 @@ sections updated. 95/95 tests passing.
   `git init`'d as part of this (previously had no git history at all).
 - Remember `#include "raw_hid.h"` explicitly — `quantum.h` doesn't pull it in automatically
   (confirmed in Phase 0).
-- Decide how many physical keys to dedicate — worth deciding explicitly rather than defaulting to
-  "however many fit." A 75% board has real estate; a natural choice is a function-layer row
-  (e.g. `Fn` + number row, or the arrow-key cluster) so the feature doesn't consume primary typing
-  keys. This decision directly sets `NUM_MACROPAD_SLOTS`, and thus what `hello` reports.
-- Implement `SLOT_KEY_0..N-1`, `process_record_user()`, `raw_hid_receive()`, and
-  `rgb_matrix_indicators_user()` — parameterized to whatever N is chosen, plus a `raw_hid_send()`
-  reply to a `MSG_PING`/hello request so `HidPadLink`'s handshake has something to receive.
-- Build `slot_to_led[]` from Air75 V2's real LED index table — confirmed in Phase 0 that this
-  lives in `keyboards/nuphy/air75_v2/ansi/keyboard.json`'s `rgb_matrix.layout` array (matrix
-  position → x/y), not in a hand-written board `.c`/`.h` file. Match chosen `matrix`/label
-  entries in that array to the physical keys chosen for slots to get real LED indices.
+- ~~Decide how many physical keys to dedicate~~ — ✅ **Decided 2026-08-03**: 4 keys to start —
+  **PageUp, PageDn, Home, End** (the board's right-edge nav column) — deliberately smaller than
+  the original macropad's 12, to keep the first real-hardware bring-up (Phase 6) cheap to verify
+  before committing to a bigger cluster. `NUM_MACROPAD_SLOTS` is `4`.
+  - These keys **lose their normal typing function** — `SLOT_KEY_0..3` are dedicated, inert
+    keycodes, not `KC_PGUP`/etc. with an RGB overlay. This was an explicit choice over the
+    lower-cost alternative (keep normal keycodes, override RGB only) — chosen deliberately even
+    though key-press dispatch is still out of scope, so pressing one currently just does nothing
+    (see `process_record_user()` below).
+- ✅ **Implemented** `SLOT_KEY_0..3`, `process_record_user()`, `raw_hid_receive()`, and
+  `rgb_matrix_indicators_user()` in `qmk-userspace/keyboards/nuphy/air75_v2/ansi/keymaps/claude_macropad/keymap.c`
+  — compiles clean (0 warnings) through the userspace overlay, 61,214 bytes.
+  - `SLOT_KEY_0..3 = QK_USER_0 + n` — **not** `QK_KB_0` (ansi.h's own `enum custom_keycodes`
+    already occupies that range) — and the enum itself needed a different **tag** name
+    (`keymap_keycodes`, not `custom_keycodes`) since C enum tags collide independently of the
+    numeric range chosen; ansi.h already declares a tag named `custom_keycodes`. Hit this exact
+    compile error once and fixed it — worth remembering if any future keymap edit reintroduces an
+    `enum custom_keycodes` here.
+  - `raw_hid_receive()` handles `MSG_PING` (replies `MSG_HELLO` with `DEVICE_ID_AIR75_V2` and
+    `NUM_MACROPAD_SLOTS`) and `MSG_SLOT` (bounds-checked write into a `slot_states[4]` array) —
+    message-type/state values match `hid_protocol.py` exactly (re-declared as local `enum`s in
+    keymap.c with a comment pointing back at the Python source, same loose-sync convention as
+    `rp2040/code.py`/`daemon.py`'s `STATE_COLORS`).
+  - `rgb_matrix_indicators_user()` also replicates `rp2040/code.py`'s "question" blink
+    (500ms on/off) — derived from `timer_read32()` directly each call rather than tracked
+    separately, since this already runs every RGB matrix frame.
+  - `process_record_user()` swallows `SLOT_KEY_0..3` (`return false`) rather than forwarding them
+    anywhere — matches the plan's "explicitly out of scope" note that dispatch can be wired in
+    later via `raw_hid_send()` without needing anything from this function today.
+- ✅ Built `slot_to_led[4] = {16, 45, 46, 73}` — computed programmatically (not by hand) from
+  `keyboard.json`'s `rgb_matrix.layout` array index for each key's matrix cell (`PageUp=[1,16]`,
+  `PageDn=[2,16]`, `Home=[1,15]`, `End=[2,15]`), confirming Phase 0's claim that LED index ==
+  array position holds in practice.
+
+Still open for Phase 4: nothing — this phase's scope (as originally written) is complete. Real
+verification that the right physical key lights up the right color is Phase 6's job (real
+hardware bring-up); nothing here has touched real hardware yet.
 
 ---
 
