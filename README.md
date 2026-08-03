@@ -11,6 +11,24 @@ This repo covers the full path end to end: an example Claude Code
 daemon that speaks a small JSON protocol with the MacroPad over USB
 serial, and the CircuitPython code that runs on the device itself.
 
+## Pad states
+
+Each slot's NeoPixel color reflects that session's current state, per
+`STATE_COLORS` in [`rp2040/code.py`](rp2040/code.py):
+
+|     | Label       | Color                      | Internal state | When                                                                                                          |
+| --- | ----------- | -------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------- |
+| ⚪  | idle        | dim gray `#282828`         | `idle`         | `SessionStart` — slot allocated, nothing happening yet                                                        |
+| 🔵  | thinking    | blue `#0000FF`             | `working`      | A prompt was submitted or a tool is running (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`)                 |
+| 🟢  | complete    | green `#00FF00`            | `done`         | `Stop` — Claude finished responding                                                                           |
+| 🟠  | needs input | orange `#FF7F00`, blinking | `question`     | Blocked on you: `AskUserQuestion`, `ExitPlanMode`, `PermissionRequest`, or `Notification:agent_needs_input`   |
+| 🟡  | waiting     | amber `#FFAA00`            | `waiting`      | Claude's been idle 60s+ with nothing blocking (`Notification:idle_prompt`) — lower urgency than "needs input" |
+| 🔴  | error       | red `#FF0000`              | `error`        | `PostToolUseFailure`                                                                                          |
+
+"needs input" blinks (0.5s on/off, `BLINK_PERIOD` in `rp2040/code.py`)
+so it reads as distinct from "waiting" at a glance despite the two
+sharing a similarly warm color.
+
 ![MacroPad in action example](./macropad.png)
 
 **Only tested on macOS.** Window-dispatch (tmux/Terminal.app/VS
@@ -44,24 +62,6 @@ for line-delimited JSON hook payloads, maps each one to a display state
 for the originating session, and pushes that state to the MacroPad over
 a USB serial connection. It also reads events back from the pad (key
 presses, encoder turns) and logs them.
-
-## Pad states
-
-Each slot's NeoPixel color reflects that session's current state, per
-`STATE_COLORS` in [`rp2040/code.py`](rp2040/code.py):
-
-|     | Label       | Color                      | Internal state | When                                                                                                          |
-| --- | ----------- | -------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------- |
-| ⚪  | idle        | dim gray `#282828`         | `idle`         | `SessionStart` — slot allocated, nothing happening yet                                                        |
-| 🔵  | thinking    | blue `#0000FF`             | `working`      | A prompt was submitted or a tool is running (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`)                 |
-| 🟢  | complete    | green `#00FF00`            | `done`         | `Stop` — Claude finished responding                                                                           |
-| 🟠  | needs input | orange `#FF7F00`, blinking | `question`     | Blocked on you: `AskUserQuestion`, `ExitPlanMode`, `PermissionRequest`, or `Notification:agent_needs_input`   |
-| 🟡  | waiting     | amber `#FFAA00`            | `waiting`      | Claude's been idle 60s+ with nothing blocking (`Notification:idle_prompt`) — lower urgency than "needs input" |
-| 🔴  | error       | red `#FF0000`              | `error`        | `PostToolUseFailure`                                                                                          |
-
-"needs input" blinks (0.5s on/off, `BLINK_PERIOD` in `rp2040/code.py`)
-so it reads as distinct from "waiting" at a glance despite the two
-sharing a similarly warm color.
 
 ## Hardware
 
