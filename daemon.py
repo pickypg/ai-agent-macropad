@@ -49,11 +49,21 @@ import serial.tools.list_ports as list_ports
 
 # --- Config ------------------------------------------------------------
 
-SOCKET_PATH = os.path.expanduser("~/.claude-macropad.sock")
+# Shared with hook.sh (which also drops itself here, see README's "Wire
+# up real Claude Code hooks" step) so everything the daemon owns on
+# disk lives under one directory instead of scattered directly in the
+# home directory. Created eagerly since a standalone daemon run (e.g.
+# via fake_hooks.py, before hook.sh has ever been copied anywhere) is
+# the first thing to need it, both for the socket bind below and for
+# the events-log handler created at import time further down.
+CONFIG_DIR = Path(os.path.expanduser("~/.claude-macropad"))
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+SOCKET_PATH = str(CONFIG_DIR / "daemon.sock")
 SERIAL_PORT = os.environ.get("MACROPAD_SERIAL_PORT")  # e.g. /dev/tty.usbmodem14201
 SERIAL_BAUD = 115200
 NUM_SLOTS = 12
-EVENTS_LOG_PATH = os.path.expanduser("~/.claude-macropad-events.log")
+EVENTS_LOG_PATH = str(CONFIG_DIR / "events.log")
 
 # USB vendor ID shared by every CircuitPython board (Adafruit's), used
 # to narrow the auto-discovery scan below before it probes anything.

@@ -57,7 +57,7 @@ Claude Code hooks --> hook.sh -->   daemon.py    <-- USB serial --> MacroPad RP2
                                   (Unix socket)
 ```
 
-`daemon.py` listens on a Unix domain socket at `~/.claude-macropad.sock`
+`daemon.py` listens on a Unix domain socket at `~/.claude-macropad/daemon.sock`
 for line-delimited JSON hook payloads, maps each one to a display state
 for the originating session, and pushes that state to the MacroPad over
 a USB serial connection. It also reads events back from the pad (key
@@ -160,7 +160,10 @@ react in real time.
 
 ### 4. Wire up real Claude Code hooks
 
-1. Copy the script and make it executable:
+1. Copy the script and make it executable. `daemon.py` also creates this
+   directory itself on startup (it hosts `daemon.sock` and `events.log`
+   too), so this step just needs to happen before the first real hook
+   fires:
 
    ```
    mkdir -p "$HOME/.claude-macropad"
@@ -188,7 +191,7 @@ react in real time.
 
 [`claude/hook.sh`](claude/hook.sh) reads the hook's JSON payload from
 stdin (Claude Code already includes `hook_event_name` and `session_id`
-in it) and forwards it to `~/.claude-macropad.sock` via `nc -U`, after
+in it) and forwards it to `~/.claude-macropad/daemon.sock` via `nc -U`, after
 using `jq` to fill in a few fields the payload doesn't reliably carry on
 its own:
 
@@ -232,7 +235,7 @@ hardware needed:
 
 ### Hook events in (socket → daemon)
 
-Each line written to `~/.claude-macropad.sock` is a single JSON object
+Each line written to `~/.claude-macropad/daemon.sock` is a single JSON object
 with (at minimum) `hook_event_name` and `session_id`, matching the shape
 of a Claude Code hook payload. Recognized fields:
 
@@ -302,7 +305,7 @@ them yet.
 ## Logs
 
 - Console: human-readable, `INFO` level.
-- `~/.claude-macropad-events.log`: rotating (5MB × 3 files) raw event
+- `~/.claude-macropad/events.log`: rotating (5MB × 3 files) raw event
   log — every socket line (parsed or not), every state mapping decision,
   and every window-dispatch attempt/result. Useful for diagnosing a
   framing or mapping bug after the fact without reproducing it live.

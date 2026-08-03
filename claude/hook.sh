@@ -40,7 +40,7 @@
 # needs to stay fast — nc's -w1 caps the connection attempt at 1s, and
 # the ps call above is skipped entirely except at SessionStart.
 
-SOCKET="$HOME/.claude-macropad.sock"
+SOCKET="$HOME/.claude-macropad/daemon.sock"
 
 input=$(cat)
 event=$(printf '%s' "$input" | jq -r '.hook_event_name // empty')

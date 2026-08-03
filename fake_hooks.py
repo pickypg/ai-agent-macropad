@@ -15,7 +15,7 @@ import uuid
 import threading
 import os
 
-SOCKET_PATH = os.path.expanduser("~/.claude-macropad.sock")
+SOCKET_PATH = os.path.expanduser("~/.claude-macropad/daemon.sock")
 
 
 def send(payload):
