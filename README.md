@@ -18,20 +18,15 @@ hasn't been tried.
 
 ## Repo layout
 
-```
-daemon.py        Host-side daemon: Unix socket server + serial link to the pad
-fake_hooks.py     Simulates a Claude Code session's hook events, for testing
-                   the daemon without real hooks wired up
-requirements.txt  Python dependencies for the daemon
-rp2040/           Code that must be copied onto the MacroPad's CIRCUITPY drive
-  boot.py          Enables the USB serial data endpoint (runs on device boot)
-  code.py          Main device loop: renders pad state, reads key/encoder input
-claude/           Claude Code hook wiring
-  example_hook_settings.json   hooks block to merge into settings.json,
-                                 wiring every relevant event to hook.sh
-  hook.sh                      Reads a hook payload from stdin, enriches
-                                 it, and forwards it to the daemon's socket
-```
+| Path | Description |
+|---|---|
+| `daemon.py` | Host-side daemon: Unix socket server + serial link to the pad |
+| `fake_hooks.py` | Simulates a Claude Code session's hook events, for testing the daemon without real hooks wired up |
+| `requirements.txt` | Python dependencies for the daemon |
+| `rp2040/boot.py` | Enables the USB serial data endpoint (runs on device boot) — copied onto the MacroPad's CIRCUITPY drive |
+| `rp2040/code.py` | Main device loop: renders pad state, reads key/encoder input — copied onto the MacroPad's CIRCUITPY drive |
+| `claude/example_hook_settings.json` | `hooks` block to merge into `settings.json`, wiring every relevant event to `hook.sh` |
+| `claude/hook.sh` | Reads a hook payload from stdin, enriches it, and forwards it to the daemon's socket |
 
 ## How it fits together
 
