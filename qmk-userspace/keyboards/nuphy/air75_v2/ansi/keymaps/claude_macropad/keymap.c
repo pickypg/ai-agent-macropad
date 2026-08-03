@@ -37,7 +37,12 @@ enum {
 };
 
 // Pad states — must match hid_protocol.py's STATE_*/rp2040/code.py's
-// STATE_COLORS keys, 1:1 and in the same order.
+// STATE_COLORS keys, 1:1 and in the same order. STATE_OFF (cleared,
+// no session mapped) is intentionally distinct from STATE_IDLE (a
+// session is mapped here but quiet) — rp2040/code.py's
+// handle_message() renders them as different colors (fully dark vs.
+// a dim glow), not just different labels, so this side needs to
+// preserve that distinction too.
 enum {
     STATE_IDLE = 0,
     STATE_WORKING,
@@ -45,6 +50,7 @@ enum {
     STATE_DONE,
     STATE_ERROR,
     STATE_QUESTION,
+    STATE_OFF,
 };
 
 // LED index per slot, in SLOT_KEY_0..3 order — read directly off
@@ -53,7 +59,10 @@ enum {
 // confirmed programmatically during Phase 4, not guessed.
 static const uint8_t slot_to_led[NUM_MACROPAD_SLOTS] = {16, 45, 46, 73};
 
-static uint8_t slot_states[NUM_MACROPAD_SLOTS] = {STATE_IDLE, STATE_IDLE, STATE_IDLE, STATE_IDLE};
+// Starts STATE_OFF, not STATE_IDLE — at boot no session is mapped to
+// any slot yet, matching rp2040/code.py's NeoPixels defaulting dark
+// before the first "slot"/"clear" message ever arrives.
+static uint8_t slot_states[NUM_MACROPAD_SLOTS] = {STATE_OFF, STATE_OFF, STATE_OFF, STATE_OFF};
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 [0] = LAYOUT_ansi_84(
@@ -98,7 +107,7 @@ void raw_hid_receive(uint8_t *data, uint8_t length) {
             if (length < 3) return;
             uint8_t index = data[1];
             uint8_t state = data[2];
-            if (index < NUM_MACROPAD_SLOTS && state <= STATE_QUESTION) {
+            if (index < NUM_MACROPAD_SLOTS && state <= STATE_OFF) {
                 slot_states[index] = state;
             }
             break;
@@ -108,7 +117,8 @@ void raw_hid_receive(uint8_t *data, uint8_t length) {
     }
 }
 
-// Mirrors STATE_COLORS in rp2040/code.py 1:1.
+// Mirrors STATE_COLORS in rp2040/code.py 1:1 — including "off" (fully
+// dark) being visually distinct from "idle" (dim gray glow).
 static void state_to_rgb(uint8_t state, uint8_t *r, uint8_t *g, uint8_t *b) {
     switch (state) {
         case STATE_WORKING:  *r = 0;   *g = 0;   *b = 255; break;
@@ -116,6 +126,7 @@ static void state_to_rgb(uint8_t state, uint8_t *r, uint8_t *g, uint8_t *b) {
         case STATE_DONE:     *r = 0;   *g = 255; *b = 0;   break;
         case STATE_ERROR:    *r = 255; *g = 0;   *b = 0;   break;
         case STATE_QUESTION: *r = 255; *g = 127; *b = 0;   break;
+        case STATE_OFF:       *r = 0;   *g = 0;   *b = 0;   break;
         case STATE_IDLE:
         default:              *r = 40;  *g = 40;  *b = 40;  break;
     }

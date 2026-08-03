@@ -188,7 +188,10 @@ def test_hidpadlink_write_json_translates_slot(monkeypatch):
         link.close()
 
 
-def test_hidpadlink_write_json_translates_clear_to_idle(monkeypatch):
+def test_hidpadlink_write_json_translates_clear_to_off(monkeypatch):
+    # Not STATE_IDLE — rp2040/code.py's handle_message() shows "clear"
+    # is fully dark, distinct from "idle"'s dim glow (a session that's
+    # merely quiet vs. no session mapped here at all).
     devices = [make_candidate(b"iface0")]
     responses = {b"iface0": hello_report()}
     monkeypatch.setattr(daemon, "hid", make_fake_hid(devices, responses))
@@ -200,7 +203,7 @@ def test_hidpadlink_write_json_translates_clear_to_idle(monkeypatch):
         report = link._dev.written[1:]
         assert report[0] == hid_protocol.MSG_SLOT
         assert report[1] == 5
-        assert report[2] == hid_protocol.STATE_IDLE
+        assert report[2] == hid_protocol.STATE_OFF
     finally:
         link.close()
 

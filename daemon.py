@@ -517,14 +517,15 @@ def _pack_for_hid(obj):
     None if this message type has no HID encoding. Only "slot" and
     "clear" ever reach write_json() today (see handle_hook_event and
     on_device_event below) — a cleared slot has no label to clear on
-    an RGB-only pad, so it's just MSG_SLOT with state "idle" (see
-    hid_protocol.py's module docstring).
+    an RGB-only pad, so it's just MSG_SLOT with state "off" (fully
+    dark — distinct from "idle"'s dim glow, matching rp2040/code.py's
+    handle_message(); see hid_protocol.py's module docstring).
     """
     t = obj.get("t")
     if t == "slot":
         return hid_protocol.pack_slot(obj["i"], obj["state"])
     if t == "clear":
-        return hid_protocol.pack_slot(obj["i"], "idle")
+        return hid_protocol.pack_slot(obj["i"], "off")
     return None
 
 

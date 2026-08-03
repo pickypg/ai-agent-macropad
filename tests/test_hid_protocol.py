@@ -31,6 +31,19 @@ def test_pack_slot_covers_every_hook_to_state_output():
         assert hid_protocol.CODE_TO_STATE[report[2]] == state
 
 
+def test_pack_slot_off_is_distinct_from_idle():
+    # "off" (cleared, no session mapped) and "idle" (a session is
+    # mapped but quiet) must be different wire values — see
+    # rp2040/code.py's handle_message(), which renders them as
+    # different colors (fully dark vs. a dim glow).
+    idle_report = hid_protocol.pack_slot(0, "idle")
+    off_report = hid_protocol.pack_slot(0, "off")
+    assert idle_report[2] == hid_protocol.STATE_IDLE
+    assert off_report[2] == hid_protocol.STATE_OFF
+    assert idle_report[2] != off_report[2]
+    assert hid_protocol.CODE_TO_STATE[off_report[2]] == "off"
+
+
 def test_pack_slot_rejects_unknown_state():
     with pytest.raises(ValueError):
         hid_protocol.pack_slot(0, "not-a-real-state")

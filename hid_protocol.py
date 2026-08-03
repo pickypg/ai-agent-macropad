@@ -26,10 +26,14 @@ MSG_PING   (host -> device): no payload. Requests a MSG_HELLO reply —
 MSG_HELLO  (device -> host): byte 1 = device id, byte 2 = num_slots.
 MSG_SLOT   (host -> device): byte 1 = slot index, byte 2 = state
             (see STATE_*). A cleared slot (the serial protocol's
-            {"t": "clear"}) is just MSG_SLOT with STATE_IDLE — there's
-            no label to clear on an RGB-only pad, so "cleared" and
-            "idle" are visually identical and don't need a separate
-            message type.
+            {"t": "clear"}) is just MSG_SLOT with STATE_OFF — rp2040/
+            code.py's handle_message() shows "clear" and "idle" are
+            NOT visually identical (idle is a dim gray glow, meaning
+            a session is mapped here but quiet; cleared is fully
+            black, meaning no session is mapped at all), so both need
+            their own state value here too — they just don't need a
+            separate wire *message type*, since there's no label to
+            clear on an RGB-only pad, only a color.
 
 Numbering matches qmk-air75v2-implementation-plan.md's Phase 1 sketch.
 """
@@ -41,15 +45,18 @@ MSG_HELLO = 0x01
 MSG_SLOT = 0x02
 MSG_PING = 0x03
 
-# Mirrors STATE_COLORS's keys in rp2040/code.py 1:1 (minus "off", which is
-# device-local only and never sent over the wire by the host) so
-# hook_to_state's output maps identically regardless of transport.
+# Mirrors STATE_COLORS's keys in rp2040/code.py 1:1 — including "off",
+# which turns out NOT to be device-local only: rp2040/code.py's
+# handle_message() sends it explicitly on "clear" (see MSG_SLOT above),
+# distinct from "idle". hook_to_state() itself never produces "off" —
+# only write_json({"t": "clear", ...})'s translation does.
 STATE_IDLE = 0
 STATE_WORKING = 1
 STATE_WAITING = 2
 STATE_DONE = 3
 STATE_ERROR = 4
 STATE_QUESTION = 5
+STATE_OFF = 6
 
 STATE_TO_CODE = {
     "idle": STATE_IDLE,
@@ -58,6 +65,7 @@ STATE_TO_CODE = {
     "done": STATE_DONE,
     "error": STATE_ERROR,
     "question": STATE_QUESTION,
+    "off": STATE_OFF,
 }
 CODE_TO_STATE = {v: k for k, v in STATE_TO_CODE.items()}
 
