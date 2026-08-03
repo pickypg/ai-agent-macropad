@@ -315,7 +315,7 @@ hardware bring-up); nothing here has touched real hardware yet.
 
 ---
 
-## Phase 5 — Test without hardware — partially done (pulled into Phase 2)
+## Phase 5 — Test without hardware — ✅ Done 2026-08-03
 
 The repo already tests `daemon.py` against fakes via `monkeypatch` (`serial.Serial`,
 `subprocess.run`, `SerialPadLink.write_json`) and has `fake_hooks.py` for exercising the socket
@@ -327,10 +327,26 @@ path without real hooks. Extend the same approach:
   `write_json()`, and `AutoPadLink`'s fallback order (19 tests). Not covered: `_read_loop`'s
   background-thread dispatch itself — consistent with `SerialPadLink._read_loop` never having
   been tested either (see Phase 2's implementation notes).
-- `fake_hooks.py` needs no changes — it talks to the daemon's socket, not the pad transport, so
-  it's already transport-agnostic. Still worth an actual run (`fake_hooks.py --sessions 3` against
-  `MACROPAD_TRANSPORT=hid` headless, no real board) once Phase 4's keymap exists, as an end-to-end
-  smoke check distinct from the unit tests above.
+- ~~`fake_hooks.py` needs no changes... Still worth an actual run (`fake_hooks.py --sessions 3`
+  against `MACROPAD_TRANSPORT=hid` headless, no real board)~~ — ✅ **Done**: ran
+  `MACROPAD_TRANSPORT=hid ./venv/bin/python3 daemon.py` (real `hid` package + native hidapi
+  library, not mocked) against `fake_hooks.py --sessions 3`, end to end:
+  - **Confirmed `fake_hooks.py` needed no changes** — talks to the socket, transport-agnostic as
+    predicted.
+  - Discovery found **one real raw-HID interface at NuPhy's VID/PID** (0x19F5/0x3246) — almost
+    certainly the actual Air75 V2, still on stock firmware (Phase 4's `claude_macropad` keymap
+    hasn't been flashed — that's Phase 6). It correctly didn't answer the custom `MSG_PING`/
+    `MSG_HELLO` handshake in time, so `HidPadLink` fell back to headless exactly as designed —
+    good unplanned validation that `discover_hid_device()`'s usage-page filtering and handshake
+    timeout both behave correctly against genuine (if not-yet-ours) hardware, not just fakes.
+  - All 3 concurrent sessions mapped through every state transition correctly (`idle` → `working`
+    → `question` for `AskUserQuestion`/`ExitPlanMode`/`PermissionRequest` → `waiting` for
+    `idle_prompt` → `done` → cleared on `SessionEnd`), correct first-fit slot allocation
+    (0/1/2), zero errors, clean `SIGTERM` shutdown.
+  - Ran alongside a real, live `daemon.py` instance from the original `claude-macropad` repo
+    (different directory, different socket path `~/.claude-macropad.sock` vs. this repo's
+    `~/.claude-macropad/daemon.sock` — confirmed no collision before starting anything) —
+    untouched throughout.
 
 ---
 
