@@ -350,14 +350,50 @@ path without real hooks. Extend the same approach:
 
 ---
 
-## Phase 6 — Bring-up on real hardware
+## Phase 6 — Bring-up on real hardware — ✅ Done 2026-08-03
 
-1. Flash the custom keymap, confirm `hello`/RGB round-trip with a minimal test script before
-   wiring the full daemon (mirrors the repo's own build history — "Blink" before "Renderer").
-2. Point `daemon.py` at it (`MACROPAD_TRANSPORT=hid`), run `fake_hooks.py --sessions 3` against a
-   slot count you'd expect to be small (per the Phase 4 key-count decision), and confirm slots
-   beyond capacity are dropped cleanly, matching Phase 3's behavior.
-3. Wire real Claude Code hooks last, same as the existing README's step 4.
+1. ✅ **Flashed and verified.** Confirmed the DFU-entry procedure first (hold `Esc` while
+   plugging in USB — QMK bootmagic, default row/col 0,0 = Esc on this board's matrix, not
+   overridden in `config.h`; inherited automatically from `"bootmagic": true` in `keyboard.json`,
+   nothing keymap-specific needed) before touching hardware — this also means recovery is always
+   possible via the same procedure regardless of what our firmware does, since bootmagic runs
+   before any custom code. `qmk flash -kb nuphy/air75_v2/ansi -km claude_macropad` (via the
+   userspace overlay) succeeded via `dfu-util`/stm32-dfu. Board re-enumerated with a raw-HID
+   interface at exactly `usage_page=0xff60 usage=0x61` as expected.
+
+   Wrote `hid_bringup_test.py` (repo root) as the "minimal test script" — standalone, bypasses
+   `daemon.py`'s threading/discovery entirely ("Blink before Renderer": prove the wire protocol
+   before trusting the full stack to it). Confirmed against real hardware: `MSG_PING` →
+   `MSG_HELLO` with `device=1, slots=4` exactly as designed, then all 4 slots (PageUp/PageDn/
+   Home/End) visually cycled through every state color in order, including the `question` blink
+   — confirmed by direct visual observation, not inferred from logs.
+2. ✅ **Slot-capacity handling verified against real hardware.** Ran
+   `MACROPAD_TRANSPORT=hid daemon.py` against the real board — handshake correctly resized
+   `SlotManager` to 4 (not the 12 default), confirming Phase 3's dynamic sizing end-to-end for
+   the first time against real hardware, not just fakes. `fake_hooks.py --sessions 6` (6 against
+   4 slots, not 3 — deliberately over capacity to actually exercise the drop path) mapped the
+   first 4 sessions to slots 0–3 correctly; every event from the 2 extra sessions logged
+   `DROPPED reason=no_free_slot` cleanly, no errors. Visually confirmed on the real board: the
+   same 4-key state cycle as step 1, no visible effect from the dropped sessions.
+3. ✅ **Real hooks wired.** Turned out `~/.claude/settings.json` (global) was *already* wired
+   with this repo's exact `hooks` block (byte-identical to `claude/example_hook_settings.json`)
+   — from the original `claude-macropad` setup. Only `~/.claude-macropad/hook.sh` needed
+   updating: it still had the old flat-file socket path (`~/.claude-macropad.sock`, matching the
+   original `claude-macropad` repo's daemon) instead of this repo's `~/.claude-macropad/
+   daemon.sock`. Backed up the old file (`hook.sh.pre-claude-qmk.bak`) before overwriting — the
+   only functional diff was that one `SOCKET=` line. `daemon.py` is now running for real
+   (default `MACROPAD_TRANSPORT` — `AutoPadLink`), confirmed by watching *this very session's*
+   own hook events flow through it live.
+
+   **Operational note**: `AutoPadLink` tries serial before HID, so with both boards physically
+   present it currently attaches to the **RP2040** (12 slots), not the Air75 V2 — expected given
+   the documented try-serial-then-hid order, not a bug. Force the Air75 V2 specifically with
+   `MACROPAD_TRANSPORT=hid`, or unplug the RP2040.
+
+All phases (0–6) are now done. Remaining scope is exactly what's listed below as explicitly out
+of scope, plus whatever falls out of actually living with this day to day (e.g. deciding whether
+12 keys the RP2040 way, 4 keys the Air75 V2 way, or something in between ends up being the right
+long-term slot count).
 
 ---
 

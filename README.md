@@ -44,7 +44,8 @@ hasn't been tried.
 | `daemon.py`                         | Host-side daemon: Unix socket server + serial/HID link to the pad                                         |
 | `hid_protocol.py`                   | Wire-level binary report format for the HID transport (QMK-based pads) — see [Protocol](#protocol)        |
 | `fake_hooks.py`                     | Simulates a Claude Code session's hook events, for testing the daemon without real hooks wired up         |
-| `qmk-air75v2-implementation-plan.md`| Plan for a second, HID-based transport targeting a NuPhy Air75 V2 (in progress)                            |
+| `hid_bringup_test.py`               | Standalone hello/RGB round-trip check against a real QMK pad, independent of `daemon.py`                  |
+| `qmk-air75v2-implementation-plan.md`| Plan for a second, HID-based transport targeting a NuPhy Air75 V2 (done as of Phase 6)                     |
 | `qmk-userspace/`                    | QMK userspace overlay: the Air75 V2 keymap source, built against a separate local QMK checkout             |
 | `requirements.txt`                  | Python dependencies for the daemon                                                                        |
 | `requirements-dev.txt`              | Adds `pytest` on top of `requirements.txt`, for running the test suite                                    |
@@ -223,12 +224,11 @@ so a daemon that isn't running never blocks a tool call or a session,
 and caps the socket write at one second so `PreToolUse`/`PostToolUse` —
 which fire on every tool call — stay fast.
 
-### 5. (In progress) Build the NuPhy Air75 V2 keymap
+### 5. Build and flash the NuPhy Air75 V2 keymap
 
-See `qmk-air75v2-implementation-plan.md` for the full plan — the keymap itself (4 slots so far:
-PageUp/PageDn/Home/End, each showing one Claude Code session's state via per-key RGB) compiles
-clean, but is not yet verified against real hardware (Phase 6 still open). The keymap source
-lives in this repo under `qmk-userspace/` (a [QMK userspace
+See `qmk-air75v2-implementation-plan.md` for the full plan — done as of Phase 6, verified against
+real hardware. 4 slots (PageUp/PageDn/Home/End), each showing one Claude Code session's state via
+per-key RGB. The keymap source lives in this repo under `qmk-userspace/` (a [QMK userspace
 overlay](https://docs.qmk.fm/newbs_external_userspace)), built against a separate local QMK
 checkout that isn't part of this repo:
 
@@ -240,6 +240,22 @@ qmk config user.qmk_home=../nuphy-qmk-firmware
 
 cd ../claude-qmk/qmk-userspace
 QMK_USERSPACE="$(pwd)" qmk compile -kb nuphy/air75_v2/ansi -km claude_macropad
+```
+
+To flash: unplug the board, hold **Esc**, plug it back in over USB-C (data-capable cable) —
+this is QMK bootmagic (default row/col 0,0 = Esc on this board), not anything keymap-specific,
+so it works for recovery too regardless of what firmware is currently on the board:
+
+```
+QMK_USERSPACE="$(pwd)" qmk flash -kb nuphy/air75_v2/ansi -km claude_macropad
+```
+
+Then verify the wire protocol works before trusting the full daemon to it —
+[`hid_bringup_test.py`](hid_bringup_test.py) pings the board directly (bypassing `daemon.py`
+entirely) and cycles all 4 slots through every state so you can watch the real LEDs:
+
+```
+python3 hid_bringup_test.py
 ```
 
 ## Testing
