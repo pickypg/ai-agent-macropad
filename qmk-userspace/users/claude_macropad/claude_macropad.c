@@ -29,9 +29,10 @@ bool claude_macropad_process_record(uint16_t keycode, keyrecord_t *record, uint1
 
 // Host -> device: MSG_PING replies with MSG_HELLO (daemon's
 // discover_hid_device()/handshake() handshake); MSG_SLOT updates one
-// slot's displayed state.
-void claude_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t device_id, uint8_t num_slots) {
-    if (length < 1) return;
+// slot's displayed state. Returns whether `data[0]` was one of ours
+// (see header for why this matters on VIA_ENABLE boards).
+bool claude_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t device_id, uint8_t num_slots) {
+    if (length < 1) return false;
 
     switch (data[0]) {
         case MSG_PING: {
@@ -40,19 +41,19 @@ void claude_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t devi
             response[1] = device_id;
             response[2] = num_slots;
             raw_hid_send(response, sizeof(response));
-            break;
+            return true;
         }
         case MSG_SLOT: {
-            if (length < 3) return;
+            if (length < 3) return true;  // ours, just malformed — drop it
             uint8_t index = data[1];
             uint8_t state = data[2];
             if (index < num_slots && index < CLAUDE_MACROPAD_MAX_SLOTS && state <= STATE_OFF) {
                 slot_states[index] = state;
             }
-            break;
+            return true;
         }
         default:
-            break;
+            return false;
     }
 }
 
@@ -78,6 +79,12 @@ static void state_to_rgb(uint8_t state, uint8_t *r, uint8_t *g, uint8_t *b) {
 void claude_macropad_paint_indicators(const uint8_t *slot_to_led, uint8_t num_slots) {
     bool blink_on = (timer_read32() / 500) % 2 == 0;
 
+    // rgb_matrix_set_color() writes the LED buffer directly, bypassing
+    // the HSV "value" scaling QMK's animation effects apply — without
+    // this, RGB_MATRIX_VAI/VAD (brightness keys) would have no effect
+    // on the status indicators.
+    uint8_t val = rgb_matrix_get_val();
+
     for (uint8_t i = 0; i < num_slots; i++) {
         uint8_t state = slot_states[i];
         uint8_t r, g, b;
@@ -85,6 +92,9 @@ void claude_macropad_paint_indicators(const uint8_t *slot_to_led, uint8_t num_sl
             r = g = b = 0;
         } else {
             state_to_rgb(state, &r, &g, &b);
+            r = (uint16_t)r * val / 255;
+            g = (uint16_t)g * val / 255;
+            b = (uint16_t)b * val / 255;
         }
         rgb_matrix_set_color(slot_to_led[i], r, g, b);
     }

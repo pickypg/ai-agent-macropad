@@ -50,9 +50,22 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     return claude_macropad_process_record(keycode, record, SLOT_KEY_0, NUM_MACROPAD_SLOTS);
 }
 
+// VIA_ENABLE boards route raw HID through via_command_kb() instead of
+// raw_hid_receive() — quantum/via.c owns that symbol outright once
+// VIA_ENABLE=yes, so defining it here too would be a duplicate-symbol
+// link error. via_command_kb() runs first and, per its contract, a
+// `true` return (our message types all live outside VIA's reserved
+// command-id range — see claude_macropad.h) fully claims the report
+// before VIA's own dispatch ever sees it.
+#ifdef VIA_ENABLE
+bool via_command_kb(uint8_t *data, uint8_t length) {
+    return claude_macropad_raw_hid_receive(data, length, DEVICE_ID_AIR75_V2, NUM_MACROPAD_SLOTS);
+}
+#else
 void raw_hid_receive(uint8_t *data, uint8_t length) {
     claude_macropad_raw_hid_receive(data, length, DEVICE_ID_AIR75_V2, NUM_MACROPAD_SLOTS);
 }
+#endif
 
 bool rgb_matrix_indicators_user(void) {
     claude_macropad_paint_indicators(slot_to_led, NUM_MACROPAD_SLOTS);

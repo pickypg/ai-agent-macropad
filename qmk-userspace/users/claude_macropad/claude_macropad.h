@@ -21,17 +21,25 @@
 
 // Message types — must match hid_protocol.py.
 //
+// MSG_SLOT/MSG_PING/MSG_KEY live at 0x20+ deliberately: 0x01-0x15 is
+// QMK VIA's own reserved via_command_id range (quantum/via.h) for
+// boards built with VIA_ENABLE=yes, which share this raw HID
+// endpoint — claude_macropad_raw_hid_receive() gets wired in ahead of
+// VIA's own dispatch (see its doc comment), so a value inside that
+// range would either get swallowed by VIA or corrupt VIA's own
+// command handling, depending on which one runs first.
+//
 // MSG_HELLO deliberately isn't the next sequential byte after MSG_KEY
 // below — it's what daemon.py's discover_hid_device() treats as proof
 // this is our pad, and 0x01 is exactly what an unrelated raw-HID
 // interface's first-ever report is likely to contain by coincidence.
 // 0xA1 ("AI") is distinctive enough that a collision would mean
-// something is actually wrong.
+// something is actually wrong (and is well clear of VIA's range too).
 enum claude_macropad_msg {
     MSG_HELLO = 0xA1,
-    MSG_SLOT  = 0x02,
-    MSG_PING  = 0x03,
-    MSG_KEY   = 0x04,
+    MSG_SLOT  = 0x20,
+    MSG_PING  = 0x21,
+    MSG_KEY   = 0x22,
 };
 
 // Pad states — must match hid_protocol.py's STATE_*/rp2040/code.py's
@@ -63,9 +71,16 @@ void claude_macropad_init(uint8_t num_slots);
 // pass that straight back as process_record_user's return value.
 bool claude_macropad_process_record(uint16_t keycode, keyrecord_t *record, uint16_t slot_key_base, uint8_t num_slots);
 
-// Call from raw_hid_receive(). Answers MSG_PING with this board's
+// Call from raw_hid_receive() on boards without VIA_ENABLE, or from
+// via_command_kb() on boards with it (via_command_kb() runs before
+// VIA's own dispatch and, per its contract, a `true` return means the
+// command was fully handled — including any raw_hid_send() reply —
+// so VIA never sees it). Answers MSG_PING with this board's
 // device_id/num_slots, and applies MSG_SLOT updates to slot state.
-void claude_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t device_id, uint8_t num_slots);
+// Returns true if `data` was one of this protocol's message types,
+// false otherwise (VIA_ENABLE boards should fall through to VIA's own
+// dispatch in that case; non-VIA boards can ignore the return value).
+bool claude_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t device_id, uint8_t num_slots);
 
 // Call from rgb_matrix_indicators_user(). `slot_to_led` maps each
 // slot index to its RGB matrix LED index (keyboard-specific, read off

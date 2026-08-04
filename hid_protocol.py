@@ -44,16 +44,24 @@ MSG_KEY    (device -> host): byte 1 = slot index. Sent only on
 REPORT_SIZE = 32  # QMK's RAW_EPSIZE default for ChibiOS boards (confirmed unchanged in
                    # NuPhy's fork during Phase 0 — see keyboards/nuphy/air75_v2/ansi/)
 
+# MSG_SLOT/MSG_PING/MSG_KEY live at 0x20+ deliberately: 0x01-0x15 is
+# QMK VIA's own reserved via_command_id range (quantum/via.h), which
+# the claude_macropad keymap now builds with VIA_ENABLE=yes — a value
+# inside that range would collide with VIA's own commands on that same
+# raw HID endpoint. See claude_macropad.h for the firmware side of
+# this.
+#
 # MSG_HELLO is deliberately not the next sequential byte after MSG_KEY
 # below — it's the value discover_hid_device() treats as proof this is
 # our pad (see parse_report()'s msg_type dispatch), and 0x01 is exactly
 # what an unrelated raw-HID interface's first-ever report is likely to
 # contain by coincidence. 0xA1 ("AI") is distinctive enough that a
-# collision would mean something is actually wrong.
+# collision would mean something is actually wrong (and is well clear
+# of VIA's range too).
 MSG_HELLO = 0xA1
-MSG_SLOT = 0x02
-MSG_PING = 0x03
-MSG_KEY = 0x04
+MSG_SLOT = 0x20
+MSG_PING = 0x21
+MSG_KEY = 0x22
 
 # Mirrors STATE_COLORS's keys in rp2040/code.py 1:1 — including "off",
 # which turns out NOT to be device-local only: rp2040/code.py's
