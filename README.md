@@ -61,7 +61,7 @@ hasn't been tried.
 | `hid_protocol.py`                   | Wire-level binary report format for the HID transport (QMK-based pads) — see [Protocol](#protocol)        |
 | `fake_hooks.py`                     | Simulates a Claude Code session's hook events, for testing the daemon without real hooks wired up         |
 | `hid_bringup_test.py`               | Standalone hello/RGB round-trip check against a real QMK pad, independent of `daemon.py`                  |
-| `qmk-userspace/`                    | QMK userspace overlay: the Air75 V2 keymap source, built against a separate local QMK checkout            |
+| `qmk-userspace/`                    | QMK userspace overlay, built against a separate local QMK checkout — `users/claude_macropad/` holds the protocol/state logic shared by every board's keymap; `keyboards/.../keymaps/claude_macropad/` holds each board's own layout, LED map, and device ID |
 | `requirements.txt`                  | Python dependencies for the daemon                                                                        |
 | `requirements-dev.txt`              | Adds `pytest` on top of `requirements.txt`, for running the test suite                                    |
 | `tests/`                            | `pytest` suite for `daemon.py` and `rp2040/code.py` (see [Testing](#testing))                             |
@@ -189,8 +189,11 @@ python3 hid_bringup_test.py
 ```
 
 Porting to a different QMK board follows the same shape: a new keymap directory under
-`qmk-userspace/keyboards/`, its board's VID/PID and RGB matrix layout, reusing the same HID
-protocol and `dispatch_bring_to_front` logic.
+`qmk-userspace/keyboards/`, with just its layout, LED-index table, and device ID — the
+HID protocol and `dispatch_bring_to_front` logic itself is shared code in
+`qmk-userspace/users/claude_macropad/`, not duplicated per board. Keep the keymap named
+`claude_macropad` (i.e. still `-km claude_macropad`) so QMK's build picks up that shared
+`users/claude_macropad/` directory automatically.
 
 ### 2. Run the daemon
 
