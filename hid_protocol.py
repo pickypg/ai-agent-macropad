@@ -39,8 +39,6 @@ MSG_KEY    (device -> host): byte 1 = slot index. Sent only on
             only ever sends {"t": "key", ...} on event.pressed. There
             is no key-up report; on_device_event() has no key-up
             concept to consume one anyway.
-
-Numbering matches qmk-air75v2-implementation-plan.md's Phase 1 sketch.
 """
 
 REPORT_SIZE = 32  # QMK's RAW_EPSIZE default for ChibiOS boards (confirmed unchanged in

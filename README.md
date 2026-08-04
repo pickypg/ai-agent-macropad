@@ -1,16 +1,26 @@
 # claude-macropad
 
-A daemon that mirrors the state of your Claude Code sessions onto an
-[Adafruit MacroPad RP2040](https://www.adafruit.com/product/5100) — one
-key/LED slot per active session, color-coded by what that session is
-doing (working, waiting on you, done, errored, etc.), with the OLED
-showing a label per slot — pressing a key brings that session's window
-(Terminal, VS Code, or IntelliJ) to the front.
+A daemon that mirrors the state of your Claude Code sessions onto a
+physical keyboard — one key/LED slot per active session, color-coded
+by what that session is doing (working, waiting on you, done, errored,
+etc.) — pressing a key brings that session's window (Terminal, VS
+Code, or IntelliJ) to the front.
+
+Two pads are supported out of the box: the [Adafruit MacroPad
+RP2040](https://www.adafruit.com/product/5100) (12 keys, plus an OLED
+that shows a label per slot) over USB serial, and any RGB QMK
+keyboard — proven on a [NuPhy Air75
+V2](https://nuphy.com/products/air75-v2) — over USB HID. Porting to
+another QMK board should take little more than adding its own keymap
+(VID/PID plus per-key mapping) — the daemon, HID wire protocol, and
+dispatch logic are already keyboard-agnostic; see [QMK keyboard (NuPhy
+Air75 V2)](#qmk-keyboard-nuphy-air75-v2) for the pattern to follow.
 
 This repo covers the full path end to end: an example Claude Code
 `settings.json` wiring plus the hook script it invokes, a host-side
-daemon that speaks a small JSON protocol with the MacroPad over USB
-serial, and the CircuitPython code that runs on the device itself.
+daemon that speaks a small JSON protocol with the pad over USB serial
+or USB HID, and the on-device code (CircuitPython for the MacroPad,
+QMK keymap C for Air75-style boards) that runs on the pad itself.
 
 ## Pad states
 
@@ -64,16 +74,25 @@ hasn't been tried.
 
 ```
 Claude Code hooks --> hook.sh -->   daemon.py    <-- USB serial --> MacroPad RP2040
-                                  (Unix socket)
+                                  (Unix socket)  <-- USB HID    --> QMK keyboard
 ```
 
 `daemon.py` listens on a Unix domain socket at `~/.claude-macropad/daemon.sock`
 for line-delimited JSON hook payloads, maps each one to a display state
-for the originating session, and pushes that state to the MacroPad over
-a USB serial connection. It also reads events back from the pad (key
-presses, encoder turns) and logs them.
+for the originating session, and pushes that state to the pad over
+USB serial (MacroPad) or USB HID (QMK keyboard). It also reads events
+back from the pad (key presses, encoder turns on the MacroPad) and
+logs them.
 
 ## Hardware
+
+Any pad needs **a USB-C cable that carries data, not just power.** A
+lot of USB-C cables are charge-only; both the serial link (MacroPad)
+and the HID link (QMK boards) need one that actually supports data
+transfer. Beyond that, requirements depend on which pad you're
+building.
+
+### Adafruit MacroPad RP2040
 
 Beyond the [MacroPad RP2040](https://www.adafruit.com/product/5100)
 board itself, getting a fully functional pad requires:
@@ -87,9 +106,6 @@ board itself, getting a fully functional pad requires:
 3. **12 MX-compatible keycaps** (technically optional — the switches
    work bare). To actually see the color, the keycaps need to
    shine-through (translucent), not opaque.
-4. **A USB-C cable that carries data, not just power.** A lot of
-   USB-C cables are charge-only; the daemon's serial link needs one
-   that actually supports data transfer.
 
 If you can get the [MacroPad RP2040 Starter
 Kit](https://www.adafruit.com/product/5128), it bundles the board, RGB
@@ -99,9 +115,26 @@ Otherwise, buy the bare-bones board, switches, and keycaps separately.
 An [acrylic enclosure](https://www.adafruit.com/product/5103) is also
 available and optional, but recommended for protecting the board.
 
+### QMK keyboards (NuPhy Air75 V2 and others)
+
+No separate switches/keycaps shopping list here — a prebuilt keyboard
+with per-key RGB is the whole requirement. This repo's keymap is
+proven on the [NuPhy Air75 V2](https://nuphy.com/products/air75-v2);
+any other QMK board with per-key RGB matrix support (`RGB_MATRIX_ENABLE`)
+should work with a keymap of its own — see [QMK keyboard (NuPhy Air75
+V2)](#qmk-keyboard-nuphy-air75-v2) for the pattern to follow when
+porting to a different board.
+
 ## Setup
 
-### 1. Flash the MacroPad
+### 1. Flash your pad
+
+Flashing is entirely different between the two pads — CircuitPython
+file copy for the MacroPad, a QMK firmware build/flash for QMK boards.
+Follow whichever subsection matches your hardware; the rest of Setup
+(steps 2-4 below) is shared.
+
+#### Adafruit MacroPad RP2040
 
 1. Put the MacroPad RP2040 into CircuitPython (see
    [Adafruit's guide](https://learn.adafruit.com/adafruit-macropad-rp2040)
@@ -118,6 +151,46 @@ available and optional, but recommended for protecting the board.
    to the root of `CIRCUITPY`, overwriting any existing `boot.py`/`code.py`.
 4. Reset the board (a fresh `boot.py` only takes effect after a reset,
    not a soft reload). All 12 keys should light up dim gray ("idle").
+
+#### QMK keyboard (NuPhy Air75 V2)
+
+Verified against real hardware. 4 slots (PageUp/PageDn/Home/End), each showing one Claude Code session's state via
+per-key RGB, and pressing one brings that session's window to the front (same
+`dispatch_bring_to_front` the RP2040 uses). The keymap source lives in this repo under
+`qmk-userspace/` (a [QMK userspace
+overlay](https://docs.qmk.fm/newbs_external_userspace)), built against a separate local QMK
+checkout that isn't part of this repo:
+
+```
+git clone --branch nuphy-keyboards https://github.com/nuphy-src/qmk_firmware.git ../nuphy-qmk-firmware
+cd ../nuphy-qmk-firmware && git submodule update --init --recursive
+brew install qmk/qmk/qmk    # plus arm-none-eabi-gcc@8 (osx-cross/arm tap) for this board's STM32F072
+qmk config user.qmk_home=../nuphy-qmk-firmware
+
+cd ../claude-qmk/qmk-userspace
+QMK_USERSPACE="$(pwd)" qmk compile -kb nuphy/air75_v2/ansi -km claude_macropad
+```
+
+To flash: unplug the board (or just turn it off), hold **Esc**, plug it back in over USB-C
+(or turn it back on) — this is QMK bootmagic (default row/col 0,0 = Esc on this board), not
+anything keymap-specific, so it works for recovery too regardless of what firmware is
+currently on the board:
+
+```
+QMK_USERSPACE="$(pwd)" qmk flash -kb nuphy/air75_v2/ansi -km claude_macropad
+```
+
+Then verify the wire protocol works before trusting the full daemon to it —
+[`hid_bringup_test.py`](hid_bringup_test.py) pings the board directly (bypassing `daemon.py`
+entirely) and cycles all 4 slots through every state so you can watch the real LEDs:
+
+```
+python3 hid_bringup_test.py
+```
+
+Porting to a different QMK board follows the same shape: a new keymap directory under
+`qmk-userspace/keyboards/`, its board's VID/PID and RGB matrix layout, reusing the same HID
+protocol and `dispatch_bring_to_front` logic.
 
 ### 2. Run the daemon
 
@@ -136,9 +209,8 @@ USB serial devices for Adafruit's vendor ID, sending each a
 `{"t": "hello", "device": "claude-macropad-v1"}` (see the `ping`/`hello`
 handshake in [`rp2040/code.py`](rp2040/code.py) and `discover_port()`
 in `daemon.py`) — then falls back to HID discovery for a QMK-based pad
-(e.g. a NuPhy Air75 V2 — see `qmk-air75v2-implementation-plan.md`,
-still in progress). No need to look up `/dev/cu.usbmodem*` by hand or
-update it after a replug.
+(e.g. a NuPhy Air75 V2). No need to look up `/dev/cu.usbmodem*` by hand
+or update it after a replug.
 
 Force one transport explicitly with `MACROPAD_TRANSPORT`, and/or skip
 serial discovery with `MACROPAD_SERIAL_PORT`:
@@ -229,42 +301,6 @@ so a daemon that isn't running never blocks a tool call or a session,
 and caps the socket write at one second so `PreToolUse`/`PostToolUse` —
 which fire on every tool call — stay fast.
 
-### 5. Build and flash the NuPhy Air75 V2 keymap
-
-See `qmk-air75v2-implementation-plan.md` for the full plan — done as of Phase 7, verified against
-real hardware. 4 slots (PageUp/PageDn/Home/End), each showing one Claude Code session's state via
-per-key RGB, and pressing one brings that session's window to the front (same
-`dispatch_bring_to_front` the RP2040 uses). The keymap source lives in this repo under
-`qmk-userspace/` (a [QMK userspace
-overlay](https://docs.qmk.fm/newbs_external_userspace)), built against a separate local QMK
-checkout that isn't part of this repo:
-
-```
-git clone --branch nuphy-keyboards https://github.com/nuphy-src/qmk_firmware.git ../nuphy-qmk-firmware
-cd ../nuphy-qmk-firmware && git submodule update --init --recursive
-brew install qmk/qmk/qmk    # plus arm-none-eabi-gcc@8 (osx-cross/arm tap) for this board's STM32F072
-qmk config user.qmk_home=../nuphy-qmk-firmware
-
-cd ../claude-qmk/qmk-userspace
-QMK_USERSPACE="$(pwd)" qmk compile -kb nuphy/air75_v2/ansi -km claude_macropad
-```
-
-To flash: unplug the board, hold **Esc**, plug it back in over USB-C (data-capable cable) —
-this is QMK bootmagic (default row/col 0,0 = Esc on this board), not anything keymap-specific,
-so it works for recovery too regardless of what firmware is currently on the board:
-
-```
-QMK_USERSPACE="$(pwd)" qmk flash -kb nuphy/air75_v2/ansi -km claude_macropad
-```
-
-Then verify the wire protocol works before trusting the full daemon to it —
-[`hid_bringup_test.py`](hid_bringup_test.py) pings the board directly (bypassing `daemon.py`
-entirely) and cycles all 4 slots through every state so you can watch the real LEDs:
-
-```
-python3 hid_bringup_test.py
-```
-
 ## Testing
 
 ```
@@ -312,7 +348,7 @@ of a Claude Code hook payload. Recognized fields:
 | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `hook_event_name`   | Selects the resulting pad state (see below)                                                                      |
 | `session_id`        | Identifies which pad slot this event belongs to                                                                  |
-| `cwd`               | Project folder name, used as the slot's OLED label                                                               |
+| `cwd`               | Project folder name, used as the slot's OLED label (MacroPad only — QMK pads are RGB-only, no label)             |
 | `tool_name`         | Distinguishes attention-worthy tools (`AskUserQuestion`, `ExitPlanMode`) and labels the slot during `PreToolUse` |
 | `notification_type` | Distinguishes `Notification` subtypes (`agent_needs_input`, `idle_prompt`, ...)                                  |
 | `tmux_pane`         | tmux pane id, for the "bring to front" key-press dispatch                                                        |
@@ -377,8 +413,7 @@ them yet.
 
 ### Pad messages (HID reports)
 
-For QMK-based pads (e.g. a NuPhy Air75 V2 — see
-`qmk-air75v2-implementation-plan.md`) instead of the RP2040, the same
+For QMK-based pads (e.g. a NuPhy Air75 V2) instead of the RP2040, the same
 messages travel as fixed-size 32-byte raw HID reports rather than
 JSON lines — see `hid_protocol.py` for the encode/decode helpers and
 exact byte layout:
@@ -418,7 +453,8 @@ pad now works end to end:
 
 - ✅ Claude Code hook wiring (`settings.json` block + `hook.sh`)
 - ✅ Socket server + hook-event → pad-state mapping
-- ✅ Serial protocol to/from the device, with pad auto-discovery
+- ✅ Serial protocol to/from the MacroPad, with pad auto-discovery
+- ✅ HID protocol to/from QMK keyboards (e.g. NuPhy Air75 V2), same auto-discovery
 - ✅ Slot allocation for concurrent sessions
 - ✅ Key-press → bring-window-to-front dispatch (macOS)
 

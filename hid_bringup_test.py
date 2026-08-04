@@ -5,9 +5,8 @@ independent of daemon.py's threading/discovery machinery — "Blink
 before Renderer": prove the wire protocol actually works on real
 hardware before trusting the full daemon stack to it.
 
-Requires the claude_macropad keymap already flashed (see
-qmk-air75v2-implementation-plan.md's Phase 6/7) and the board plugged
-in over USB, in wired mode.
+Requires the claude_macropad keymap already flashed and the board
+plugged in over USB, in wired mode.
 
 Usage:
     python3 hid_bringup_test.py
