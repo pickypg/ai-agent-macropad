@@ -19,8 +19,9 @@
 // own enum custom_keycodes (RF_DFU, LNK_USB, ...) already occupies.
 // Also can't reuse the tag name "custom_keycodes" itself — ansi.h's
 // enum already claims it, and C enum tags collide independently of
-// the value range chosen.
-enum keymap_keycodes {
+// the value range chosen. claude_macropad_keycodes is specific enough
+// to this keymap that it won't run into the same problem again.
+enum claude_macropad_keycodes {
     SLOT_KEY_0 = QK_USER_0,  // PageUp position
     SLOT_KEY_1,              // PageDn position
     SLOT_KEY_2,              // Home position
@@ -28,11 +29,18 @@ enum keymap_keycodes {
 };
 
 #define NUM_MACROPAD_SLOTS 4
-#define DEVICE_ID_AIR75_V2 0x01
+#define DEVICE_ID_AIR75_V2 0xA7
 
 // Message types — must match hid_protocol.py.
+//
+// MSG_HELLO deliberately isn't the next sequential byte after MSG_KEY
+// below — it's what daemon.py's discover_hid_device() treats as proof
+// this is our pad, and 0x01 is exactly what an unrelated raw-HID
+// interface's first-ever report is likely to contain by coincidence.
+// 0xA1 ("AI") is distinctive enough that a collision would mean
+// something is actually wrong.
 enum {
-    MSG_HELLO = 0x01,
+    MSG_HELLO = 0xA1,
     MSG_SLOT  = 0x02,
     MSG_PING  = 0x03,
     MSG_KEY   = 0x04,

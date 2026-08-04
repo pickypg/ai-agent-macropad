@@ -44,7 +44,13 @@ MSG_KEY    (device -> host): byte 1 = slot index. Sent only on
 REPORT_SIZE = 32  # QMK's RAW_EPSIZE default for ChibiOS boards (confirmed unchanged in
                    # NuPhy's fork during Phase 0 — see keyboards/nuphy/air75_v2/ansi/)
 
-MSG_HELLO = 0x01
+# MSG_HELLO is deliberately not the next sequential byte after MSG_KEY
+# below — it's the value discover_hid_device() treats as proof this is
+# our pad (see parse_report()'s msg_type dispatch), and 0x01 is exactly
+# what an unrelated raw-HID interface's first-ever report is likely to
+# contain by coincidence. 0xA1 ("AI") is distinctive enough that a
+# collision would mean something is actually wrong.
+MSG_HELLO = 0xA1
 MSG_SLOT = 0x02
 MSG_PING = 0x03
 MSG_KEY = 0x04
@@ -75,7 +81,7 @@ CODE_TO_STATE = {v: k for k, v in STATE_TO_CODE.items()}
 
 # Placeholder until a second QMK board is actually in hand (see plan's
 # "explicitly out of scope" — multi-board support isn't needed yet).
-DEVICE_ID_AIR75_V2 = 0x01
+DEVICE_ID_AIR75_V2 = 0xA7
 
 
 def pack_ping():
