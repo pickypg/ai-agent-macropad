@@ -30,12 +30,18 @@ Each slot's NeoPixel color reflects that session's current state, per
 so it reads as distinct from "waiting" at a glance despite the two
 sharing a similarly warm color.
 
-![MacroPad in action example](./macropad.png)
-
 **Only tested on macOS.** Window-dispatch (tmux/Terminal.app/VS
 Code/IntelliJ activation) uses AppleScript and is macOS-only outright;
 the rest (daemon, hook.sh, serial protocol) may work elsewhere but
 hasn't been tried.
+
+### Adafruit MacroPad RP2040 Working Example
+
+![MacroPad in action example](./adafruit.macropad.rp2040.png)
+
+### NuPhy Air75 V2 (QMK) Working Example
+
+![Air75 V2 in action example](./nuphy.air75.v2.png)
 
 ## Repo layout
 
@@ -45,8 +51,7 @@ hasn't been tried.
 | `hid_protocol.py`                   | Wire-level binary report format for the HID transport (QMK-based pads) — see [Protocol](#protocol)        |
 | `fake_hooks.py`                     | Simulates a Claude Code session's hook events, for testing the daemon without real hooks wired up         |
 | `hid_bringup_test.py`               | Standalone hello/RGB round-trip check against a real QMK pad, independent of `daemon.py`                  |
-| `qmk-air75v2-implementation-plan.md`| Plan for a second, HID-based transport targeting a NuPhy Air75 V2 (done as of Phase 7)                     |
-| `qmk-userspace/`                    | QMK userspace overlay: the Air75 V2 keymap source, built against a separate local QMK checkout             |
+| `qmk-userspace/`                    | QMK userspace overlay: the Air75 V2 keymap source, built against a separate local QMK checkout            |
 | `requirements.txt`                  | Python dependencies for the daemon                                                                        |
 | `requirements-dev.txt`              | Adds `pytest` on top of `requirements.txt`, for running the test suite                                    |
 | `tests/`                            | `pytest` suite for `daemon.py` and `rp2040/code.py` (see [Testing](#testing))                             |
@@ -379,11 +384,11 @@ JSON lines — see `hid_protocol.py` for the encode/decode helpers and
 exact byte layout:
 
 | Byte 0 (type) | Direction       | Bytes 1-2                          |
-| ------------- | ---------------- | ---------------------------------- |
-| `MSG_PING`    | daemon → device  | (none)                             |
-| `MSG_HELLO`   | device → daemon  | device id, `slots`                 |
-| `MSG_SLOT`    | daemon → device  | slot index, state (0-6, see below) |
-| `MSG_KEY`     | device → daemon  | slot index                         |
+| ------------- | --------------- | ---------------------------------- |
+| `MSG_PING`    | daemon → device | (none)                             |
+| `MSG_HELLO`   | device → daemon | device id, `slots`                 |
+| `MSG_SLOT`    | daemon → device | slot index, state (0-6, see below) |
+| `MSG_KEY`     | device → daemon | slot index                         |
 
 State bytes mirror `STATE_COLORS`'s keys in `rp2040/code.py` 1:1
 (`idle`=0, `working`=1, `waiting`=2, `done`=3, `error`=4,
