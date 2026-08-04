@@ -381,9 +381,16 @@ class PadTransport:
     between them) is actually active.
     """
 
-    def __init__(self, on_device_event):
+    def __init__(self, on_device_event, on_reattach=None):
         self.on_device_event = on_device_event
         self.attached = False
+        # Fired after a read loop that lost the connection (real
+        # HIDException/SerialException, not a plain read timeout — see
+        # each subclass's _reconnect()) re-establishes it. Lets Daemon
+        # replay per-slot state that the pad missed while it was
+        # asleep/disconnected, without this base class or either
+        # transport needing to know anything about slots.
+        self.on_reattach = on_reattach or (lambda: None)
         # Correlates a pending handshake() call with the "hello" reply
         # its ping eventually produces, without a second connection or
         # racing the background reader thread for the same bytes —
@@ -439,9 +446,22 @@ class SerialPadLink(PadTransport):
     host->device; a background thread handles device->host reads so
     the socket server never blocks on serial I/O."""
 
-    def __init__(self, port, baud, on_device_event):
-        super().__init__(on_device_event)
+    # Seconds between reconnect attempts once the port has gone away —
+    # a class attribute (not a literal in _reconnect()) so tests can
+    # shrink it instead of eating this delay for real.
+    RECONNECT_POLL_SECONDS = 2
+
+    def __init__(self, port, baud, on_device_event, on_reattach=None):
+        super().__init__(on_device_event, on_reattach)
         self.port = port
+        # Whether `port` was pinned via MACROPAD_SERIAL_PORT, captured
+        # before open()/reconnect() overwrite self.port with whatever
+        # discover_port() found. A forced port keeps retrying that
+        # exact path on reconnect — re-probing could otherwise pick a
+        # *different* board if more than one is attached — while an
+        # auto-discovered one re-runs discover_port() each time, since
+        # the /dev/cu.usbmodemNNNN path isn't stable across replugs.
+        self._forced_port = bool(port)
         self.baud = baud
         self._ser = None
         self._stop = threading.Event()
@@ -494,8 +514,16 @@ class SerialPadLink(PadTransport):
             try:
                 chunk = self._ser.read(256)
             except serial.SerialException:
-                log.exception("serial read failed — retrying in 1s")
-                time.sleep(1)
+                # Unlike a plain read timeout (which just returns b""
+                # and falls through below), SerialException means the
+                # underlying fd itself died — e.g. the pad was
+                # unplugged, or its wireless link dropped while
+                # asleep. Retrying read() on the same self._ser can't
+                # recover from that; only reopening the port can.
+                log.warning("serial read failed — pad disconnected, reconnecting")
+                self.attached = False
+                buf = b""  # don't stitch a line across the disconnect
+                self._reconnect()
                 continue
             if chunk:
                 buf += chunk
@@ -510,6 +538,35 @@ class SerialPadLink(PadTransport):
                         log.warning("bad json from pad: %r", line)
                         continue
                     self._dispatch(msg)
+
+    def _reconnect(self):
+        """Block (without spinning) until the pad's serial port
+        reappears or close() is called, then swap in a fresh
+        connection. Retries the exact forced port if one was pinned
+        via MACROPAD_SERIAL_PORT — re-probing could otherwise attach
+        to a different board — otherwise re-runs discover_port() each
+        attempt, since the /dev/cu.usbmodemNNNN path isn't stable
+        across replugs.
+        """
+        if self._ser:
+            try:
+                self._ser.close()
+            except serial.SerialException:
+                pass
+            self._ser = None  # write_json()/_send_ping() already no-op on None
+        while not self._stop.is_set():
+            port = self.port if self._forced_port else discover_port(self.baud)
+            if port:
+                try:
+                    self._ser = serial.Serial(port, self.baud, timeout=0.2)
+                    self.port = port
+                    self.attached = True
+                    log.info("pad reattached on %s", port)
+                    self.on_reattach()
+                    return
+                except serial.SerialException:
+                    pass
+            self._stop.wait(self.RECONNECT_POLL_SECONDS)
 
 
 def _pack_for_hid(obj):
@@ -538,8 +595,13 @@ class HidPadLink(PadTransport):
     discover_hid_device() above).
     """
 
-    def __init__(self, on_device_event, vid=NUPHY_USB_VID, pid=NUPHY_USB_PID):
-        super().__init__(on_device_event)
+    # Seconds between reconnect attempts once the handle has died — a
+    # class attribute (not a literal in _reconnect()) so tests can
+    # shrink it instead of eating this delay for real.
+    RECONNECT_POLL_SECONDS = 2
+
+    def __init__(self, on_device_event, vid=NUPHY_USB_VID, pid=NUPHY_USB_PID, on_reattach=None):
+        super().__init__(on_device_event, on_reattach)
         self.vid = vid
         self.pid = pid
         self._dev = None
@@ -609,8 +671,16 @@ class HidPadLink(PadTransport):
             try:
                 data = self._dev.read(hid_protocol.REPORT_SIZE, timeout=200)
             except hid.HIDException:
-                log.exception("HID read failed — retrying in 1s")
-                time.sleep(1)
+                # Unlike a plain read timeout (which just returns b""
+                # and falls through below), HIDException means the
+                # OS-level handle itself died — the realistic cause is
+                # a wireless keyboard's BT link dropping while asleep,
+                # not mere firmware quiet. Retrying read() on the same
+                # self._dev can't recover from that; only rediscovering
+                # and reopening can.
+                log.warning("HID read failed — pad asleep/disconnected, reconnecting")
+                self.attached = False
+                self._reconnect()
                 continue
             if not data:
                 continue
@@ -619,6 +689,32 @@ class HidPadLink(PadTransport):
                 log.warning("unrecognized HID report: %r", bytes(data))
                 continue
             self._dispatch(msg)
+
+    def _reconnect(self):
+        """Block (without spinning) until the pad reappears over HID
+        or close() is called, then swap in a fresh device handle.
+        Mirrors SerialPadLink._reconnect(): re-runs discover_hid_device()
+        each attempt rather than reopening the old path directly, since
+        it may no longer be valid after the underlying handle died.
+        """
+        if self._dev:
+            try:
+                self._dev.close()
+            except hid.HIDException:
+                pass
+            self._dev = None  # write_json()/_send_ping() already no-op on None
+        while not self._stop.is_set():
+            path = discover_hid_device(self.vid, self.pid)
+            if path:
+                try:
+                    self._dev = hid.Device(path=path)
+                    self.attached = True
+                    log.info("pad reattached over HID (path=%r)", path)
+                    self.on_reattach()
+                    return
+                except hid.HIDException:
+                    pass
+            self._stop.wait(self.RECONNECT_POLL_SECONDS)
 
 
 class AutoPadLink(PadTransport):
@@ -630,18 +726,18 @@ class AutoPadLink(PadTransport):
     transport actually attaches owns write_json/close from then on.
     """
 
-    def __init__(self, on_device_event):
-        super().__init__(on_device_event)
+    def __init__(self, on_device_event, on_reattach=None):
+        super().__init__(on_device_event, on_reattach)
         self._active = None
 
     def open(self):
-        serial_link = SerialPadLink(SERIAL_PORT, SERIAL_BAUD, self.on_device_event)
+        serial_link = SerialPadLink(SERIAL_PORT, SERIAL_BAUD, self.on_device_event, self.on_reattach)
         serial_link.open()
         if serial_link.attached:
             self._active = serial_link
             return
 
-        hid_link = HidPadLink(self.on_device_event)
+        hid_link = HidPadLink(self.on_device_event, on_reattach=self.on_reattach)
         hid_link.open()
         if hid_link.attached:
             self._active = hid_link
@@ -669,22 +765,22 @@ class AutoPadLink(PadTransport):
             self._active.close()
 
 
-def make_pad_link(on_device_event):
+def make_pad_link(on_device_event, on_reattach=None):
     """Picks the pad transport per MACROPAD_TRANSPORT (see module
     docstring): "serial" or "hid" force one explicitly, anything else
     (including unset) gets AutoPadLink's try-serial-then-hid order.
     """
     if TRANSPORT == "serial":
-        return SerialPadLink(SERIAL_PORT, SERIAL_BAUD, on_device_event)
+        return SerialPadLink(SERIAL_PORT, SERIAL_BAUD, on_device_event, on_reattach)
     if TRANSPORT == "hid":
-        return HidPadLink(on_device_event)
+        return HidPadLink(on_device_event, on_reattach=on_reattach)
     if TRANSPORT is not None:
         log.warning(
             "unrecognized MACROPAD_TRANSPORT=%r (expected 'serial' or 'hid') "
             "— auto-detecting instead",
             TRANSPORT,
         )
-    return AutoPadLink(on_device_event)
+    return AutoPadLink(on_device_event, on_reattach)
 
 
 # --- Daemon: socket server + hook->state logic -------------------------
@@ -714,7 +810,15 @@ class Daemon:
         # (Phase 3), so a running daemon with real hardware attached
         # never actually uses NUM_SLOTS unless the handshake fails.
         self.slots = SlotManager(NUM_SLOTS)
-        self.pad = make_pad_link(self.on_device_event)
+        # slot index -> last {"t": "slot"/"clear", ...} message sent for
+        # it, kept in sync by _send_pad() below. Replayed by
+        # resync_pad() after the transport reattaches post-sleep/
+        # disconnect (see HidPadLink._reconnect / SerialPadLink._reconnect)
+        # — the pad's own display has no memory of what it missed while
+        # it was gone, so without this it'd just come back showing
+        # whatever it last displayed before going quiet.
+        self.pad_state = {}
+        self.pad = make_pad_link(self.on_device_event, on_reattach=self.resync_pad)
         # session_id -> {"slot": i, "tool_name": ..., "since": monotonic
         # timestamp, "escalated": bool}. Populated on PreToolUse when the
         # initial state is "working" (not already "question"/etc.),
@@ -737,6 +841,41 @@ class Daemon:
         # Terminal.app tab this session is running in — an exact
         # match, unlike VS Code's fuzzy title substring match.
         self.session_ttys = {}
+
+    def _send_pad(self, msg):
+        """write_json(), plus remembering it in self.pad_state so
+        resync_pad() can replay it later. Every slot/clear write should
+        go through this instead of self.pad.write_json() directly —
+        skipping it just means that slot won't be restored after a
+        reconnect.
+
+        Merges into the cached entry rather than overwriting it: a
+        mid-session update like a plain state change carries no
+        "label" key at all, and overwriting wholesale would silently
+        drop the label a PreToolUse message set earlier. "clear" pops
+        the slot entirely — a freed slot has nothing to resync.
+        """
+        i = msg.get("i")
+        if i is not None:
+            if msg.get("t") == "clear":
+                self.pad_state.pop(i, None)
+            else:
+                self.pad_state.setdefault(i, {}).update(msg)
+        self.pad.write_json(msg)
+
+    def resync_pad(self):
+        """Replays every slot's last-known state after the transport
+        reattaches (see HidPadLink._reconnect / SerialPadLink._reconnect)
+        — the pad has no memory of what it missed while it was asleep
+        or disconnected, so without this it'd come back showing
+        whatever it last displayed before going quiet. Runs on the
+        transport's background reconnect thread; snapshot the values
+        first since _send_pad() can mutate pad_state concurrently from
+        the connection-handling side.
+        """
+        log.info("pad reattached — resyncing %d slot(s)", len(self.pad_state))
+        for msg in list(self.pad_state.values()):
+            self.pad.write_json(msg)
 
     # device -> host: keypress / encoder events from the pad.
     #
@@ -771,7 +910,7 @@ class Daemon:
                     # with SessionEnd, or the pad's own state drifted
                     # from ours) — clear its color/OLED rather than
                     # leaving it showing whatever it last displayed.
-                    self.pad.write_json({"t": "clear", "i": i})
+                    self._send_pad({"t": "clear", "i": i})
                 return
             self.dispatch_bring_to_front(i, session_id)
         elif t == "enc":
@@ -1130,7 +1269,7 @@ class Daemon:
             label = Path(payload.get("cwd", "")).name or session_id[:8]
             self.session_projects[session_id] = label
             if i is not None:
-                self.pad.write_json(
+                self._send_pad(
                     {"t": "slot", "i": i, "state": "idle", "label": label}
                 )
                 events_log.info(
@@ -1146,7 +1285,7 @@ class Daemon:
             self.session_ttys.pop(session_id, None)
             self.session_projects.pop(session_id, None)
             if i is not None:
-                self.pad.write_json({"t": "clear", "i": i})
+                self._send_pad({"t": "clear", "i": i})
                 events_log.info("MAPPED slot=%s cleared (SessionEnd)", i)
             return
 
@@ -1206,7 +1345,7 @@ class Daemon:
         msg = {"t": "slot", "i": i, "state": state}
         if event_name == "PreToolUse" and payload.get("tool_name"):
             msg["label"] = payload["tool_name"]
-        self.pad.write_json(msg)
+        self._send_pad(msg)
         events_log.info("MAPPED slot=%s state=%s event=%s", i, state, event_name)
 
     async def watch_stalled_calls(self):
@@ -1231,7 +1370,7 @@ class Daemon:
                 if now - pending["since"] < STALL_THRESHOLD_SECONDS:
                     continue
                 pending["escalated"] = True
-                self.pad.write_json({"t": "slot", "i": pending["slot"], "state": "question"})
+                self._send_pad({"t": "slot", "i": pending["slot"], "state": "question"})
                 events_log.info(
                     "MAPPED slot=%s state=question event=stall_detected tool=%s elapsed=%.1fs",
                     pending["slot"], pending["tool_name"], now - pending["since"],
