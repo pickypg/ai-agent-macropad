@@ -56,11 +56,12 @@ def do_handshake(dev):
     return None
 
 
-def cycle_states(dev):
-    print("\nCycling all 4 slots through every state — watch PageUp/PageDn/Home/End...")
+def cycle_states(dev, num_slots):
+    print(f"\nCycling all {num_slots} slots through every state — watch PageUp/PageDn/Home/End "
+          "(slots 4+ only light up if you've assigned them to a key via VIA)...")
     for state_name in ("working", "waiting", "done", "error", "question", "idle"):
         print(f"  state={state_name}")
-        for i in range(4):
+        for i in range(num_slots):
             report = hid_protocol.pack_slot(i, state_name)
             dev.write(bytes([0]) + report)
         hold = QUESTION_HOLD_SECONDS if state_name == "question" else STATE_HOLD_SECONDS
@@ -69,14 +70,15 @@ def cycle_states(dev):
 
 def listen_for_keys(dev):
     """Isolates "does the firmware send the right MSG_KEY report" from
-    "does the daemon correctly dispatch a window" — press each of
-    PageUp/PageDn/Home/End and confirm the printed slot index matches
-    (0=PageUp, 1=PageDn, 2=Home, 3=End, matching slot_to_led order in
-    keymap.c), with no daemon or session mapping involved yet.
+    "does the daemon correctly dispatch a window" — press PageUp, PageDn,
+    Home, and End (slots 0-3 by default) and confirm the printed slot
+    index matches (0=PageUp, 1=PageDn, 2=Home, 3=End); if you've assigned
+    any AI_AGENT_KEY_4.. to a spare key via VIA, press that too and
+    confirm its index. No daemon or session mapping involved yet.
     """
     print(
-        "\nListening for key presses — press PageUp, PageDn, Home, and End "
-        "(Ctrl+C to stop)..."
+        "\nListening for key presses — press PageUp, PageDn, Home, End, and "
+        "any VIA-assigned slot keys (Ctrl+C to stop)..."
     )
     try:
         while True:
@@ -111,15 +113,15 @@ def main():
         print(f"hello: device={reply['device']} slots={reply['slots']}")
         if reply["device"] != hid_protocol.DEVICE_ID_AIR75_V2:
             print(f"WARNING: unexpected device id {reply['device']!r}")
-        if reply["slots"] != 4:
-            print(f"WARNING: expected 4 slots, got {reply['slots']}")
+        num_slots = reply["slots"]
         print("PASS: hello round-trip OK")
 
-        cycle_states(dev)
+        cycle_states(dev, num_slots)
         print(
-            "\nDone with RGB cycling. PASS if all 4 keys visibly changed "
-            "color together at each step above, and 'question' blinked "
-            "rather than staying solid."
+            "\nDone with RGB cycling. PASS if PageUp/PageDn/Home/End visibly "
+            "changed color together at each step above (plus any keys "
+            "you've VIA-assigned to slots 4+), and 'question' blinked rather "
+            "than staying solid."
         )
 
         listen_for_keys(dev)

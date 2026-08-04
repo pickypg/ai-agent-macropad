@@ -154,9 +154,17 @@ Follow whichever subsection matches your hardware; the rest of Setup
 
 #### QMK keyboard (NuPhy Air75 V2)
 
-Verified against real hardware. 4 slots (PageUp/PageDn/Home/End), each showing one Claude Code session's state via
-per-key RGB, and pressing one brings that session's window to the front (same
-`dispatch_bring_to_front` the RP2040 uses). The keymap source lives in this repo under
+Verified against real hardware. 4 slots wired by default (PageUp/PageDn/Home/End), each
+showing one Claude Code session's state via per-key RGB, and pressing one brings that
+session's window to the front (same `dispatch_bring_to_front` the RP2040 uses). On boards
+built with `VIA_ENABLE` (this one is), up to 8 slots are reachable from the VIA app — drag
+one of the "AI Slot 4".."AI Slot 7" custom keycodes (see `via.json` in the keymap directory)
+onto any spare key in the [VIA app](https://www.caniusevia.com/) and it lights up
+automatically; remap a slot key away and its LED goes dark just as automatically. (The shared
+firmware actually supports up to 12 slots, but VIA's app hard-caps `customKeycodes` at 32
+total entries, and NuPhy's own stock entries already use most of that budget — see the
+comment above `enum claude_macropad_keycodes` in `keymap.c` for the exact accounting.) The
+keymap source lives in this repo under
 `qmk-userspace/` (a [QMK userspace
 overlay](https://docs.qmk.fm/newbs_external_userspace)), built against a separate local QMK
 checkout that isn't part of this repo:
@@ -182,11 +190,40 @@ QMK_USERSPACE="$(pwd)" qmk flash -kb nuphy/air75_v2/ansi -km claude_macropad
 
 Then verify the wire protocol works before trusting the full daemon to it —
 [`hid_bringup_test.py`](hid_bringup_test.py) pings the board directly (bypassing `daemon.py`
-entirely) and cycles all 4 slots through every state so you can watch the real LEDs:
+entirely) and cycles every slot the board reports through every state so you can watch the
+real LEDs:
 
 ```
 python3 hid_bringup_test.py
 ```
+
+##### Using the VIA app
+
+**The VIA app and `daemon.py` can't run at the same time.** Both talk to the same raw HID
+interface (our protocol deliberately shares VIA's endpoint rather than using a separate one),
+and macOS enforces exclusive access to it at the OS level — whichever one opens it first locks
+the other out, and VIA will report the keyboard as "not responding like a VIA-enabled keyboard"
+if it loses that race. **Stop the daemon before opening VIA**, and restart it once you're done
+reassigning keys.
+
+To reassign slots (e.g. to move a default slot off PageUp/PageDn/Home/End, or to put "AI Slot
+4".."AI Slot 7" on a spare key):
+
+1. In VIA's Settings page, enable **Show Design tab**.
+2. In the new Design tab, manually load
+   [`via.json`](qmk-userspace/keyboards/nuphy/air75_v2/ansi/keymaps/claude_macropad/via.json)
+   (this board isn't in VIA's official keyboard registry, so it won't be auto-detected —
+   loading the file directly is what tells VIA how to talk to it).
+3. Switch to the Configure tab, make sure **layer 0** is selected, and drag any of the custom
+   "AI Slot N" keycodes (bottom-left CUSTOM section) onto the key you want it to live on — or
+   drag any other keycode onto PageUp/PageDn/Home/End to move a default slot elsewhere.
+
+![VIA Configure tab showing the AI Slot custom keycodes](./via.nuphy.air75.v2.png)
+
+Reassignments take effect immediately — no reflashing needed. `claude_macropad.c`'s dynamic
+scan picks up wherever a slot key actually is the moment you make the change (see the "Dynamic
+AI-agent slots" work in this repo's history for how that works), and once you restart the
+daemon it'll rediscover the board with whatever layout you left it in.
 
 Porting to a different QMK board follows the same shape: a new keymap directory under
 `qmk-userspace/keyboards/`, with just its layout, LED-index table, and device ID — the

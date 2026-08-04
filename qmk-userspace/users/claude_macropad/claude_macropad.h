@@ -59,17 +59,46 @@ enum claude_macropad_state {
     STATE_OFF,
 };
 
-// Resets all `num_slots` slots to STATE_OFF. Call once from
-// keyboard_post_init_user() — a plain static array would default to
-// STATE_IDLE (0), not STATE_OFF, so this can't be skipped.
-void claude_macropad_init(uint8_t num_slots);
+// Resets all `num_slots` slots to STATE_OFF, and seeds their LED
+// mapping from `slot_to_led` (a static slot-index -> LED-index table,
+// keyboard-specific, read off keyboard.json's rgb_matrix.layout). On
+// VIA_ENABLE boards, pass NULL — a static table can't know where the
+// user has actually put each key — and call claude_macropad_scan_slots()
+// right after instead. Call once from keyboard_post_init_user().
+void claude_macropad_init(uint8_t num_slots, const uint8_t *slot_to_led);
 
 // Call from process_record_user(). `slot_key_base` is the keymap's
-// first SLOT_KEY_* custom keycode (its remaining SLOT_KEY_1.. must be
-// the next `num_slots - 1` sequential values). Returns false (keycode
-// handled, swallowed) for a slot key press/release, true otherwise —
-// pass that straight back as process_record_user's return value.
+// first AI_AGENT_KEY_* custom keycode (its remaining AI_AGENT_KEY_1..
+// must be the next `num_slots - 1` sequential values). Returns false
+// (keycode handled, swallowed) for a slot key press/release, true
+// otherwise — pass that straight back as process_record_user's return
+// value.
 bool claude_macropad_process_record(uint16_t keycode, keyrecord_t *record, uint16_t slot_key_base, uint8_t num_slots);
+
+#ifdef VIA_ENABLE
+// VIA_ENABLE-only: (re)builds the slot -> LED table from scratch by
+// scanning every matrix position's *dynamic* (EEPROM, user-remappable)
+// keycode on layer 0 for anything in [slot_key_base, slot_key_base +
+// num_slots). Call once from keyboard_post_init_user(), right after
+// claude_macropad_init(NUM_SLOTS, NULL) — QMK's own boot sequence
+// always runs via_init() (which loads the dynamic keymap EEPROM)
+// before keyboard_post_init_user(), so the data is ready by then.
+void claude_macropad_scan_slots(uint16_t slot_key_base, uint8_t num_slots);
+
+// VIA_ENABLE-only. Call from via_command_kb(), alongside (order
+// doesn't matter) claude_macropad_raw_hid_receive() — this only peeks
+// at VIA's own dynamic-keymap commands, it never claims them. Keeps
+// the slot -> LED table in sync whenever the user remaps a key via
+// VIA: clears a slot immediately if its key gets remapped away (so its
+// LED goes dark instead of showing stale state), and picks up a key
+// newly assigned to an unused AI_AGENT_KEY_* the moment it's dropped
+// there. Tracks single-key remaps (VIA's "drag a keycode onto a key"
+// UI — by far the common path) and "reset to default" precisely; a
+// bulk keymap import (VIA's advanced JSON-import feature) needs one
+// follow-up key edit, or a power cycle, to resync — a deliberate scope
+// cut, not an oversight.
+void claude_macropad_track_via_remap(uint8_t *data, uint8_t length, uint16_t slot_key_base, uint8_t num_slots);
+#endif
 
 // Call from raw_hid_receive() on boards without VIA_ENABLE, or from
 // via_command_kb() on boards with it (via_command_kb() runs before
@@ -82,7 +111,8 @@ bool claude_macropad_process_record(uint16_t keycode, keyrecord_t *record, uint1
 // dispatch in that case; non-VIA boards can ignore the return value).
 bool claude_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t device_id, uint8_t num_slots);
 
-// Call from rgb_matrix_indicators_user(). `slot_to_led` maps each
-// slot index to its RGB matrix LED index (keyboard-specific, read off
-// keyboard.json's rgb_matrix.layout).
-void claude_macropad_paint_indicators(const uint8_t *slot_to_led, uint8_t num_slots);
+// Call from rgb_matrix_indicators_user(). Paints each slot's state
+// onto its current LED, per the table claude_macropad_init()/
+// claude_macropad_scan_slots() built — a slot with no key currently
+// assigned (NO_LED) is simply skipped.
+void claude_macropad_paint_indicators(uint8_t num_slots);
