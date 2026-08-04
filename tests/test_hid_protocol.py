@@ -65,6 +65,11 @@ def test_parse_report_hello():
     }
 
 
+def test_parse_report_key():
+    report = bytes([hid_protocol.MSG_KEY, 2]) + bytes(30)
+    assert hid_protocol.parse_report(report) == {"t": "key", "i": 2}
+
+
 def test_parse_report_unknown_type_returns_none():
     report = bytes([0xFF]) + bytes(31)
     assert hid_protocol.parse_report(report) is None
@@ -72,6 +77,10 @@ def test_parse_report_unknown_type_returns_none():
 
 def test_parse_report_truncated_hello_returns_none():
     assert hid_protocol.parse_report(bytes([hid_protocol.MSG_HELLO, 0x01])) is None
+
+
+def test_parse_report_truncated_key_returns_none():
+    assert hid_protocol.parse_report(bytes([hid_protocol.MSG_KEY])) is None
 
 
 def test_parse_report_empty_returns_none():

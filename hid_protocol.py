@@ -34,6 +34,11 @@ MSG_SLOT   (host -> device): byte 1 = slot index, byte 2 = state
             their own state value here too — they just don't need a
             separate wire *message type*, since there's no label to
             clear on an RGB-only pad, only a color.
+MSG_KEY    (device -> host): byte 1 = slot index. Sent only on
+            key-down — mirrors rp2040/code.py's main() loop, which
+            only ever sends {"t": "key", ...} on event.pressed. There
+            is no key-up report; on_device_event() has no key-up
+            concept to consume one anyway.
 
 Numbering matches qmk-air75v2-implementation-plan.md's Phase 1 sketch.
 """
@@ -44,6 +49,7 @@ REPORT_SIZE = 32  # QMK's RAW_EPSIZE default for ChibiOS boards (confirmed uncha
 MSG_HELLO = 0x01
 MSG_SLOT = 0x02
 MSG_PING = 0x03
+MSG_KEY = 0x04
 
 # Mirrors STATE_COLORS's keys in rp2040/code.py 1:1 — including "off",
 # which turns out NOT to be device-local only: rp2040/code.py's
@@ -113,4 +119,8 @@ def parse_report(report):
         if len(report) < 3:
             return None
         return {"t": "hello", "device": report[1], "slots": report[2]}
+    if msg_type == MSG_KEY:
+        if len(report) < 2:
+            return None
+        return {"t": "key", "i": report[1]}
     return None

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Phase 6 step 1: minimal hello/RGB round-trip test against the real
-Air75 V2, independent of daemon.py's threading/discovery machinery —
-"Blink before Renderer": prove the wire protocol actually works on
-real hardware before trusting the full daemon stack to it.
+Minimal hello/RGB/key-press round-trip test against the real Air75 V2,
+independent of daemon.py's threading/discovery machinery — "Blink
+before Renderer": prove the wire protocol actually works on real
+hardware before trusting the full daemon stack to it.
 
 Requires the claude_macropad keymap already flashed (see
-qmk-air75v2-implementation-plan.md's Phase 6) and the board plugged in
-over USB, in wired mode.
+qmk-air75v2-implementation-plan.md's Phase 6/7) and the board plugged
+in over USB, in wired mode.
 
 Usage:
     python3 hid_bringup_test.py
@@ -68,6 +68,29 @@ def cycle_states(dev):
         time.sleep(hold)
 
 
+def listen_for_keys(dev):
+    """Isolates "does the firmware send the right MSG_KEY report" from
+    "does the daemon correctly dispatch a window" — press each of
+    PageUp/PageDn/Home/End and confirm the printed slot index matches
+    (0=PageUp, 1=PageDn, 2=Home, 3=End, matching slot_to_led order in
+    keymap.c), with no daemon or session mapping involved yet.
+    """
+    print(
+        "\nListening for key presses — press PageUp, PageDn, Home, and End "
+        "(Ctrl+C to stop)..."
+    )
+    try:
+        while True:
+            data = dev.read(hid_protocol.REPORT_SIZE, timeout=200)
+            if not data:
+                continue
+            msg = hid_protocol.parse_report(bytes(data))
+            if msg and msg.get("t") == "key":
+                print(f"  key i={msg['i']}")
+    except KeyboardInterrupt:
+        print("\nstopped")
+
+
 def main():
     path = find_raw_hid_path()
     if not path:
@@ -94,13 +117,15 @@ def main():
         print("PASS: hello round-trip OK")
 
         cycle_states(dev)
+        print(
+            "\nDone with RGB cycling. PASS if all 4 keys visibly changed "
+            "color together at each step above, and 'question' blinked "
+            "rather than staying solid."
+        )
+
+        listen_for_keys(dev)
     finally:
         dev.close()
-
-    print(
-        "\nDone. PASS if all 4 keys visibly changed color together at each "
-        "step above, and 'question' blinked rather than staying solid."
-    )
 
 
 if __name__ == "__main__":

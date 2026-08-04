@@ -45,7 +45,7 @@ hasn't been tried.
 | `hid_protocol.py`                   | Wire-level binary report format for the HID transport (QMK-based pads) — see [Protocol](#protocol)        |
 | `fake_hooks.py`                     | Simulates a Claude Code session's hook events, for testing the daemon without real hooks wired up         |
 | `hid_bringup_test.py`               | Standalone hello/RGB round-trip check against a real QMK pad, independent of `daemon.py`                  |
-| `qmk-air75v2-implementation-plan.md`| Plan for a second, HID-based transport targeting a NuPhy Air75 V2 (done as of Phase 6)                     |
+| `qmk-air75v2-implementation-plan.md`| Plan for a second, HID-based transport targeting a NuPhy Air75 V2 (done as of Phase 7)                     |
 | `qmk-userspace/`                    | QMK userspace overlay: the Air75 V2 keymap source, built against a separate local QMK checkout             |
 | `requirements.txt`                  | Python dependencies for the daemon                                                                        |
 | `requirements-dev.txt`              | Adds `pytest` on top of `requirements.txt`, for running the test suite                                    |
@@ -226,9 +226,11 @@ which fire on every tool call — stay fast.
 
 ### 5. Build and flash the NuPhy Air75 V2 keymap
 
-See `qmk-air75v2-implementation-plan.md` for the full plan — done as of Phase 6, verified against
+See `qmk-air75v2-implementation-plan.md` for the full plan — done as of Phase 7, verified against
 real hardware. 4 slots (PageUp/PageDn/Home/End), each showing one Claude Code session's state via
-per-key RGB. The keymap source lives in this repo under `qmk-userspace/` (a [QMK userspace
+per-key RGB, and pressing one brings that session's window to the front (same
+`dispatch_bring_to_front` the RP2040 uses). The keymap source lives in this repo under
+`qmk-userspace/` (a [QMK userspace
 overlay](https://docs.qmk.fm/newbs_external_userspace)), built against a separate local QMK
 checkout that isn't part of this repo:
 
@@ -380,14 +382,21 @@ exact byte layout:
 | ------------- | ---------------- | ---------------------------------- |
 | `MSG_PING`    | daemon → device  | (none)                             |
 | `MSG_HELLO`   | device → daemon  | device id, `slots`                 |
-| `MSG_SLOT`    | daemon → device  | slot index, state (0-5, see below) |
+| `MSG_SLOT`    | daemon → device  | slot index, state (0-6, see below) |
+| `MSG_KEY`     | device → daemon  | slot index                         |
 
 State bytes mirror `STATE_COLORS`'s keys in `rp2040/code.py` 1:1
 (`idle`=0, `working`=1, `waiting`=2, `done`=3, `error`=4,
-`question`=5), so `hook_to_state`'s output maps identically regardless
-of which transport is attached. There's no separate "clear" report —
-an RGB-only pad has no label to clear, so a cleared slot is just
-`MSG_SLOT` with state `idle`.
+`question`=5, `off`=6), so `hook_to_state`'s output maps identically
+regardless of which transport is attached. There's no separate
+"clear" report — an RGB-only pad has no label to clear, so a cleared
+slot is just `MSG_SLOT` with state `off` (fully dark — distinct from
+`idle`'s dim glow, matching `rp2040/code.py`'s own `handle_message()`).
+
+Key-press dispatch works the same as the serial protocol's
+`{"t": "key", "i": N}` — sent on key-down only, no key-up equivalent,
+since `on_device_event()` doesn't distinguish transports and has no
+key-up concept to consume one anyway.
 
 ## Logs
 

@@ -8,9 +8,10 @@
 // LED indices matches keyboard.json's rgb_matrix.layout array
 // position (confirmed in Phase 0 — not hand-guessed).
 //
-// Key-press dispatch (bring-to-front) is explicitly out of scope for
-// now (see qmk-air75v2-implementation-plan.md) — pressing a SLOT_KEY
-// does nothing.
+// Pressing a SLOT_KEY sends a MSG_KEY report (slot index, key-down
+// only — mirrors rp2040/code.py's press-only send) instead of typing
+// anything; daemon.py's dispatch_bring_to_front() (transport-agnostic,
+// unchanged) does the rest.
 #include QMK_KEYBOARD_H
 #include "raw_hid.h"
 
@@ -34,6 +35,7 @@ enum {
     MSG_HELLO = 0x01,
     MSG_SLOT  = 0x02,
     MSG_PING  = 0x03,
+    MSG_KEY   = 0x04,
 };
 
 // Pad states — must match hid_protocol.py's STATE_*/rp2040/code.py's
@@ -80,8 +82,16 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         case SLOT_KEY_1:
         case SLOT_KEY_2:
         case SLOT_KEY_3:
-            // Dispatch deferred (see file header) — swallow rather
-            // than sending a keycode that no longer means anything.
+            // Still swallowed either way (see file header) — these
+            // stay dedicated, inert keys, never typed. Slot index is
+            // SLOT_KEY_0..3's position, valid since they're sequential
+            // enum values starting at QK_USER_0.
+            if (record->event.pressed) {
+                uint8_t report[32] = {0};
+                report[0] = MSG_KEY;
+                report[1] = keycode - SLOT_KEY_0;
+                raw_hid_send(report, sizeof(report));
+            }
             return false;
         default:
             return true;

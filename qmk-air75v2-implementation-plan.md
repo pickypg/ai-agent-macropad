@@ -390,17 +390,71 @@ path without real hooks. Extend the same approach:
    the documented try-serial-then-hid order, not a bug. Force the Air75 V2 specifically with
    `MACROPAD_TRANSPORT=hid`, or unplug the RP2040.
 
-All phases (0–6) are now done. Remaining scope is exactly what's listed below as explicitly out
-of scope, plus whatever falls out of actually living with this day to day (e.g. deciding whether
-12 keys the RP2040 way, 4 keys the Air75 V2 way, or something in between ends up being the right
-long-term slot count).
+---
+
+## Phase 7 — Key-press dispatch on Air75 V2 — ✅ Done 2026-08-03
+
+Pressing a `SLOT_KEY` currently does nothing — the RP2040 macropad already brings a session's
+window to the front on key press (`Daemon.dispatch_bring_to_front()`), and this was explicitly
+deferred for the Air75 V2 in the original "out of scope" list below, on the theory that it could
+be "added later via `raw_hid_send()` following the same shape as Phase 1's inbound reports,
+reusing `dispatch_bring_to_front` unchanged." Confirmed true by direct inspection before writing
+any code: `on_device_event()`/`dispatch_bring_to_front()` in `daemon.py` are already fully
+transport-agnostic (only ever consume/act on a `{"t": "key", "i": N}` dict, never reference which
+transport produced it) and already fully covered by `tests/test_dispatch.py`, calling them
+directly. So this phase needed **zero daemon.py changes** — only the wire protocol and firmware
+needed to grow one new device→host message.
+
+- `hid_protocol.py`: added `MSG_KEY = 0x04` (device → host, byte 1 = slot index, no
+  press/release flag — mirrors rp2040/code.py's `main()`, which only ever sends
+  `{"t": "key", ...}` on `event.pressed`; `on_device_event` has no key-up concept to consume one
+  anyway). `parse_report()` gained a matching branch producing `{"t": "key", "i": N}`. No
+  `pack_key()` — following the existing precedent set by `MSG_HELLO` (also device → host, also no
+  corresponding `pack_*()`; nothing in production code ever needs to construct one host-side, so
+  tests build raw bytes by hand, same as `test_parse_report_hello` already did).
+- `keymap.c`: `process_record_user()`'s `SLOT_KEY_0..3` cases now send a `MSG_KEY` report via
+  `raw_hid_send()` when `record->event.pressed` is true (slot index = `keycode - SLOT_KEY_0`,
+  valid since the enum is sequential from `QK_USER_0`), then still unconditionally `return false`
+  — the keys remain dedicated/inert, no typing side effect, same as Phase 4's original decision.
+  Compiles clean, 0 warnings, 61,262 bytes (+44 over Phase 6's build).
+- Tests: `tests/test_hid_protocol.py` gained `test_parse_report_key` and
+  `test_parse_report_truncated_key_returns_none`, matching the existing `MSG_HELLO` test style.
+  Deliberately **no** `tests/test_hid_pad_link.py` addition — `HidPadLink._read_loop`'s
+  background-thread dispatch has zero coverage for *any* message type today, consistent with
+  `SerialPadLink._read_loop` never being tested either (an explicit, accepted gap from Phase 2/5).
+  Adding one just for `MSG_KEY` would be an inconsistent one-off. `tests/test_dispatch.py`:
+  unchanged, already covers the daemon-side logic this reuses.
+- `hid_bringup_test.py` gained a `listen_for_keys()` step, run after the existing RGB-cycling
+  demo: reads reports, decodes them via `hid_protocol.parse_report()`, prints `key i=<N>` for
+  each — lets a physical key press be confirmed independently of the daemon (isolates "firmware
+  sends the right report" from "daemon dispatches the right window"), consistent with this
+  script's "Blink before Renderer" purpose established in Phase 6. Hit one real bug writing this:
+  Python's stdout is fully buffered (not line-buffered) once redirected to a file rather than a
+  TTY, so a naive `python3 script.py > log.txt &` produced no output at all while the listen loop
+  ran — needed `python3 -u` (unbuffered) to actually see anything before the process exited.
+
+### Real hardware verification
+
+Reflashed via the same `qmk flash` + Esc-hold DFU procedure established in Phase 6 (no change to
+the procedure itself). All steps confirmed on the real board:
+
+- `hid_bringup_test.py`'s `listen_for_keys()` (run unbuffered): pressed all four keys in turn,
+  each reported the exact expected slot index — `key i=0` (PageUp), `i=1` (PageDn), `i=2` (Home),
+  `i=3` (End) — matching `slot_to_led` order exactly, with no daemon involved. Confirms the
+  firmware sends the right report before testing anything daemon-side.
+- Full dispatch chain, `MACROPAD_TRANSPORT=hid daemon.py` against the real board: this very
+  Claude Code session lazily-allocated to slot 0 (PageUp) with no tmux pane and no tty (lazy
+  allocation only backfills `tmux_pane`/project, not tty — see `handle_hook_event`), so dispatch
+  had only a project-name match (`claude-qmk`) to go on. Pressed PageUp — `DISPATCH slot=0
+  project=claude-qmk result=ok`, and the VS Code window was actually raised (confirmed visually,
+  not just via the log line).
+- No-session path: pressed a key with no session mapped (End, slot 3) — `DISPATCH key=3
+  result=no_session`, no window activity, matching `on_device_event`'s existing (unit-tested)
+  no-op behavior, now confirmed against real hardware too.
 
 ---
 
 ## Explicitly out of scope
 
-- Key-press dispatch on Air75 V2 (window-bring-to-front) — optional; can be added later via
-  `raw_hid_send()` following the same shape as Phase 1's inbound reports, reusing
-  `dispatch_bring_to_front` unchanged.
 - Urgency-based slot reallocation for small-N boards — deferred until a board with genuinely
   limited keys is actually in hand.
