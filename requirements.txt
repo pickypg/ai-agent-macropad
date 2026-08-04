@@ -1,1 +1,6 @@
 pyserial
+
+# Optional — only needed for MACROPAD_TRANSPORT=hid/auto against a QMK
+# pad (e.g. NuPhy Air75 V2). Also requires the native hidapi library
+# (e.g. `brew install hidapi` on macOS). Uncomment to install:
+# hid

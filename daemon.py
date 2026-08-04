@@ -3,26 +3,31 @@
 Claude Code Macropad — Phase 3 daemon.
 
 Listens for hook events on a Unix socket, maintains the
-session_id -> pad slot mapping, and mirrors state to the
-MacroPad RP2040 over serial. Also reads key/encoder events back
-from the pad — routing those to tmux panes is Phase 5, so for
-now they're just logged to confirm the round trip works.
+session_id -> pad slot mapping, and mirrors state to the pad over
+either a serial MacroPad RP2040 or a QMK-based pad over HID (e.g. a
+NuPhy Air75 V2) — see PadTransport below. Also reads key/encoder
+events back from the pad — routing those to tmux panes is Phase 5, so
+for now they're just logged to confirm the round trip works.
 
 Usage:
     python3 daemon.py
 
-By default the daemon auto-detects the pad: it probes every USB
-serial device advertising Adafruit's vendor ID with a ping/hello
-handshake (see discover_port() below and the "ping" handler in
-rp2040/code.py) and attaches to whichever one answers. Set
-MACROPAD_SERIAL_PORT to skip discovery and force a specific port
-instead:
+By default the daemon auto-detects the pad (AutoPadLink): it tries
+serial discovery first — probing every USB serial device advertising
+Adafruit's vendor ID with a ping/hello handshake (see discover_port()
+below and the "ping" handler in rp2040/code.py) — then HID discovery
+(see discover_hid_device() below), attaching to whichever answers
+first. Set MACROPAD_TRANSPORT=serial or MACROPAD_TRANSPORT=hid to
+force one transport instead of auto-detecting, and
+MACROPAD_SERIAL_PORT to skip serial discovery and force a specific
+port:
 
+    MACROPAD_TRANSPORT=hid python3 daemon.py
     MACROPAD_SERIAL_PORT=/dev/cu.usbmodem14201 python3 daemon.py
 
 Runs headless (no crash, just logs what it *would* send) if no pad
-is found and MACROPAD_SERIAL_PORT isn't set, so you can develop the
-socket/slot-mapping logic before the hardware is even plugged in.
+answers either transport, so you can develop the socket/slot-mapping
+logic before any hardware is plugged in.
 
 Note (macOS): use the /dev/cu.* device, not /dev/tty.*. The tty
 node waits on DCD/carrier-detect before some opens complete, which
@@ -30,7 +35,10 @@ can make pyserial's Serial() hang until the board is unplugged.
 cu.* opens immediately and is the right node for a program writing
 to the port (as opposed to an interactive `screen` session).
 
-Requires: pip install pyserial
+Requires: pip install pyserial. HID transport additionally requires
+pip install hid, plus the native hidapi library (e.g. brew install
+hidapi on macOS) — optional: daemon.py runs fine without either
+installed, it just can't attach over HID.
 """
 import asyncio
 import json
@@ -46,6 +54,13 @@ from pathlib import Path
 
 import serial  # pyserial
 import serial.tools.list_ports as list_ports
+
+try:
+    import hid  # optional — only needed for MACROPAD_TRANSPORT=hid/auto against a QMK pad
+except ImportError:
+    hid = None
+
+import hid_protocol
 
 # --- Config ------------------------------------------------------------
 
@@ -71,6 +86,26 @@ ADAFRUIT_USB_VID = 0x239A
 
 # Must match DEVICE_ID in rp2040/code.py's "hello" response.
 PAD_DEVICE_ID = "claude-macropad-v1"
+
+# USB VID/PID for the NuPhy Air75 V2 (ANSI), confirmed against NuPhy's
+# own keyboard.json during Phase 0. Unlike ADAFRUIT_USB_VID above,
+# this alone disambiguates the board — no shared-vendor-ID ambiguity
+# to resolve the way serial discovery has to. A second QMK board would
+# need its own VID/PID here; out of scope until one is in hand (see
+# the plan's "explicitly out of scope" section).
+NUPHY_USB_VID = 0x19F5
+NUPHY_USB_PID = 0x3246
+
+# QMK's raw HID usage page/usage (RAW_USAGE_PAGE/RAW_USAGE_ID defaults
+# in tmk_core/protocol/usb_descriptor_common.h) — narrows HID discovery
+# to the raw HID interface specifically, not the same board's normal
+# boot-keyboard/NKRO HID interfaces, which share the same VID/PID.
+RAW_USAGE_PAGE = 0xFF60
+RAW_USAGE_ID = 0x61
+
+# "serial" | "hid" | unset (auto: try serial discovery, then HID, then
+# run headless if neither answers — see AutoPadLink).
+TRANSPORT = os.environ.get("MACROPAD_TRANSPORT")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -153,11 +188,11 @@ def hook_to_state(event_name, tool_name=None, notification_type=None):
 # --- Slot allocation -------------------------------------------------------
 
 class SlotManager:
-    """Maps Claude Code session_id -> pad slot index (0..NUM_SLOTS-1).
+    """Maps Claude Code session_id -> pad slot index (0..num_slots-1).
 
     Deliberately naive for Phase 3: first-fit allocation, no eviction.
-    §9's open question (LRU eviction vs. OLED paging past 12 concurrent
-    sessions) is intentionally left unanswered here.
+    §9's open question (LRU eviction vs. OLED paging past num_slots
+    concurrent sessions) is intentionally left unanswered here.
     """
 
     def __init__(self, num_slots):
@@ -275,17 +310,139 @@ def discover_port(baud=SERIAL_BAUD, handshake_timeout=1.5):
     return found[0]
 
 
-# --- Serial link to the pad -------------------------------------------
+# --- HID discovery -------------------------------------------------------
 
-class PadLink:
-    """Owns the serial connection. write_json() is host->device; a
-    background thread handles device->host reads so the socket
-    server never blocks on serial I/O."""
+def discover_hid_device(vid, pid, handshake_timeout=1.5):
+    """Find a QMK pad's raw-HID interface path without assuming it's
+    the only HID interface the board exposes. A QMK keyboard enumerates
+    several interfaces under one VID/PID (boot keyboard, NKRO, and the
+    raw HID/VIA interface) — usage_page/usage narrows candidates to
+    just the raw HID one (RAW_USAGE_PAGE/RAW_USAGE_ID), the same way
+    discover_port() narrows serial candidates by vendor ID before
+    probing. Each candidate then gets a MSG_PING and only counts as a
+    match if it answers MSG_HELLO within handshake_timeout — raw HID
+    is call-and-response (see hid_protocol.py), so nothing arrives
+    unprompted the way discover_port() can just listen after a plain
+    ping.
+
+    Returns the interface's opaque hidapi `path`, or None if nothing
+    answered.
+    """
+    if hid is None:
+        return None
+    candidates = [
+        d for d in hid.enumerate(vid, pid)
+        if d["usage_page"] == RAW_USAGE_PAGE and d["usage"] == RAW_USAGE_ID
+    ]
+    log.info(
+        "HID discovery: %d raw-HID interface(s) matching vid=0x%04x pid=0x%04x",
+        len(candidates), vid, pid,
+    )
+    if not candidates:
+        return None
+
+    for candidate in candidates:
+        path = candidate["path"]
+        try:
+            dev = hid.Device(path=path)
+        except hid.HIDException as e:
+            log.info("HID discovery: %r failed to open: %s", path, e)
+            continue
+        try:
+            dev.write(bytes([0]) + hid_protocol.pack_ping())
+            deadline = time.monotonic() + handshake_timeout
+            while time.monotonic() < deadline:
+                data = dev.read(hid_protocol.REPORT_SIZE, timeout=100)
+                if not data:
+                    continue
+                msg = hid_protocol.parse_report(bytes(data))
+                if msg and msg.get("t") == "hello":
+                    log.info("HID discovery: %r replied hello — match", path)
+                    return path
+        except hid.HIDException as e:
+            log.info("HID discovery: %r failed during handshake: %s", path, e)
+        finally:
+            dev.close()
+
+    log.info("HID discovery: no interface answered hello within %ss", handshake_timeout)
+    return None
+
+
+# --- Pad transports --------------------------------------------------------
+
+class PadTransport:
+    """Common interface every pad link implements: open()/close() own
+    the connection lifecycle, write_json(obj) is host -> device, and
+    on_device_event(dict) (passed in here, called from each subclass's
+    own background reader thread) is device -> host. Everything
+    downstream — SlotManager, hook_to_state, Daemon.handle_hook_event,
+    the stall watcher — only ever touches these, so it needs zero
+    changes regardless of which transport (or AutoPadLink's choice
+    between them) is actually active.
+    """
+
+    def __init__(self, on_device_event):
+        self.on_device_event = on_device_event
+        self.attached = False
+        # Correlates a pending handshake() call with the "hello" reply
+        # its ping eventually produces, without a second connection or
+        # racing the background reader thread for the same bytes —
+        # see _dispatch()/handshake() below.
+        self._hello_event = threading.Event()
+        self._last_hello = None
+
+    def open(self):
+        raise NotImplementedError
+
+    def close(self):
+        raise NotImplementedError
+
+    def write_json(self, obj):
+        raise NotImplementedError
+
+    def _send_ping(self):
+        raise NotImplementedError
+
+    def _dispatch(self, msg):
+        """Every subclass's read loop calls this instead of
+        on_device_event directly. A "hello" reply is forwarded
+        normally *and* wakes up any handshake() call waiting on one —
+        the same background thread does both jobs, so there's no
+        separate blocking read to race against it.
+        """
+        if msg.get("t") == "hello":
+            self._last_hello = msg
+            self._hello_event.set()
+        self.on_device_event(msg)
+
+    def handshake(self, timeout=1.5):
+        """Ask the device how many slots it has (Phase 3): pings and
+        waits up to `timeout` seconds for a "hello" reply correlated
+        via _dispatch() above. Returns {"slots": N}, or None if
+        open() found no pad (nothing to ask) or nothing valid replied
+        in time — callers should fall back to a sane default rather
+        than treat that as fatal, same posture as a headless pad
+        generally.
+        """
+        if not self.attached:
+            return None
+        self._hello_event.clear()
+        self._send_ping()
+        if self._hello_event.wait(timeout):
+            return {"slots": self._last_hello.get("slots")}
+        log.warning("pad didn't answer a slots handshake within %ss", timeout)
+        return None
+
+
+class SerialPadLink(PadTransport):
+    """Owns the serial connection to a MacroPad RP2040. write_json() is
+    host->device; a background thread handles device->host reads so
+    the socket server never blocks on serial I/O."""
 
     def __init__(self, port, baud, on_device_event):
+        super().__init__(on_device_event)
         self.port = port
         self.baud = baud
-        self.on_device_event = on_device_event
         self._ser = None
         self._stop = threading.Event()
         self._thread = None
@@ -296,11 +453,12 @@ class PadLink:
             self.port = discover_port(self.baud)
             if not self.port:
                 log.warning(
-                    "no pad found via auto-discovery — running headless "
+                    "no pad found via serial auto-discovery — running headless "
                     "(plug in the pad, or set MACROPAD_SERIAL_PORT to force a port)"
                 )
                 return
         self._ser = serial.Serial(self.port, self.baud, timeout=0.2)
+        self.attached = True
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
         log.info("attached to pad on %s", self.port)
@@ -321,6 +479,14 @@ class PadLink:
             self._ser.write(line)
         except serial.SerialException:
             log.exception("serial write failed")
+
+    def _send_ping(self):
+        if self._ser is None:
+            return
+        try:
+            self._ser.write((json.dumps({"t": "ping"}) + "\n").encode("utf-8"))
+        except serial.SerialException:
+            log.exception("serial write failed (handshake ping)")
 
     def _read_loop(self):
         buf = b""
@@ -343,7 +509,181 @@ class PadLink:
                     except ValueError:
                         log.warning("bad json from pad: %r", line)
                         continue
-                    self.on_device_event(msg)
+                    self._dispatch(msg)
+
+
+def _pack_for_hid(obj):
+    """Translate a write_json() dict into a Phase 1 binary report, or
+    None if this message type has no HID encoding. Only "slot" and
+    "clear" ever reach write_json() today (see handle_hook_event and
+    on_device_event below) — a cleared slot has no label to clear on
+    an RGB-only pad, so it's just MSG_SLOT with state "idle" (see
+    hid_protocol.py's module docstring).
+    """
+    t = obj.get("t")
+    if t == "slot":
+        return hid_protocol.pack_slot(obj["i"], obj["state"])
+    if t == "clear":
+        return hid_protocol.pack_slot(obj["i"], "idle")
+    return None
+
+
+class HidPadLink(PadTransport):
+    """Owns the HID connection to a QMK-based pad (e.g. NuPhy Air75
+    V2). Same open()/close()/write_json() shape as SerialPadLink, but
+    reports are hid_protocol.py's fixed-size binary reports instead of
+    JSON lines, and raw HID is call-and-response — the device never
+    pushes MSG_HELLO unprompted, so discovery always pings first (see
+    discover_hid_device() above).
+    """
+
+    def __init__(self, on_device_event, vid=NUPHY_USB_VID, pid=NUPHY_USB_PID):
+        super().__init__(on_device_event)
+        self.vid = vid
+        self.pid = pid
+        self._dev = None
+        self._stop = threading.Event()
+        self._thread = None
+
+    def open(self):
+        if hid is None:
+            log.warning(
+                "the 'hid' package isn't installed — HID transport unavailable "
+                "(pip install hid, plus the native hidapi library)"
+            )
+            return
+        path = discover_hid_device(self.vid, self.pid)
+        if not path:
+            log.warning(
+                "no HID pad found (vid=0x%04x pid=0x%04x) — running headless "
+                "(plug in the pad, or check MACROPAD_TRANSPORT)",
+                self.vid, self.pid,
+            )
+            return
+        try:
+            self._dev = hid.Device(path=path)
+        except hid.HIDException:
+            log.exception("failed to open HID device at %r", path)
+            return
+        self.attached = True
+        self._thread = threading.Thread(target=self._read_loop, daemon=True)
+        self._thread.start()
+        log.info("attached to pad over HID (path=%r)", path)
+
+    def close(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=1)
+        if self._dev:
+            self._dev.close()
+
+    def write_json(self, obj):
+        report = _pack_for_hid(obj)
+        if report is None:
+            log.debug("HID transport: no encoding for %s, dropping", obj)
+            return
+        if self._dev is None:
+            log.debug("(headless) would send: %s", obj)
+            return
+        try:
+            # hidapi expects a leading report-ID byte on writes even
+            # though QMK's raw HID interface doesn't use numbered
+            # report IDs (id 0, implicit) — confirm this convention
+            # (and the equivalent on the read side, in _read_loop
+            # below) holds during Phase 6's real-hardware bring-up.
+            self._dev.write(bytes([0]) + report)
+        except hid.HIDException:
+            log.exception("HID write failed")
+
+    def _send_ping(self):
+        if self._dev is None:
+            return
+        try:
+            self._dev.write(bytes([0]) + hid_protocol.pack_ping())
+        except hid.HIDException:
+            log.exception("HID write failed (handshake ping)")
+
+    def _read_loop(self):
+        while not self._stop.is_set():
+            try:
+                data = self._dev.read(hid_protocol.REPORT_SIZE, timeout=200)
+            except hid.HIDException:
+                log.exception("HID read failed — retrying in 1s")
+                time.sleep(1)
+                continue
+            if not data:
+                continue
+            msg = hid_protocol.parse_report(bytes(data))
+            if msg is None:
+                log.warning("unrecognized HID report: %r", bytes(data))
+                continue
+            self._dispatch(msg)
+
+
+class AutoPadLink(PadTransport):
+    """Default when MACROPAD_TRANSPORT isn't set: tries serial
+    discovery first (today's more mature, more-tested path), then
+    falls back to HID discovery, and finally runs headless if neither
+    pad answers. A session only ever has one physical pad attached, so
+    this is discovery order, not fan-out to both at once — whichever
+    transport actually attaches owns write_json/close from then on.
+    """
+
+    def __init__(self, on_device_event):
+        super().__init__(on_device_event)
+        self._active = None
+
+    def open(self):
+        serial_link = SerialPadLink(SERIAL_PORT, SERIAL_BAUD, self.on_device_event)
+        serial_link.open()
+        if serial_link.attached:
+            self._active = serial_link
+            return
+
+        hid_link = HidPadLink(self.on_device_event)
+        hid_link.open()
+        if hid_link.attached:
+            self._active = hid_link
+            return
+
+        log.warning("no pad found via serial or HID auto-discovery — running headless")
+        self._active = serial_link  # headless SerialPadLink already logs "(headless) would send"
+
+    def write_json(self, obj):
+        if self._active is None:
+            log.debug("(headless, not yet open) would send: %s", obj)
+            return
+        self._active.write_json(obj)
+
+    def handshake(self, timeout=1.5):
+        # Delegates rather than using PadTransport's own implementation
+        # — AutoPadLink has no connection or reader thread of its own,
+        # just whichever concrete transport open() picked.
+        if self._active is None:
+            return None
+        return self._active.handshake(timeout)
+
+    def close(self):
+        if self._active:
+            self._active.close()
+
+
+def make_pad_link(on_device_event):
+    """Picks the pad transport per MACROPAD_TRANSPORT (see module
+    docstring): "serial" or "hid" force one explicitly, anything else
+    (including unset) gets AutoPadLink's try-serial-then-hid order.
+    """
+    if TRANSPORT == "serial":
+        return SerialPadLink(SERIAL_PORT, SERIAL_BAUD, on_device_event)
+    if TRANSPORT == "hid":
+        return HidPadLink(on_device_event)
+    if TRANSPORT is not None:
+        log.warning(
+            "unrecognized MACROPAD_TRANSPORT=%r (expected 'serial' or 'hid') "
+            "— auto-detecting instead",
+            TRANSPORT,
+        )
+    return AutoPadLink(on_device_event)
 
 
 # --- Daemon: socket server + hook->state logic -------------------------
@@ -367,8 +707,13 @@ STALL_THRESHOLD_SECONDS = 10
 
 class Daemon:
     def __init__(self):
+        # Default sizing — used as-is by tests and any headless run
+        # (see recording_daemon in tests/conftest.py). serve() resizes
+        # this after the pad's handshake reports its real slot count
+        # (Phase 3), so a running daemon with real hardware attached
+        # never actually uses NUM_SLOTS unless the handshake fails.
         self.slots = SlotManager(NUM_SLOTS)
-        self.pad = PadLink(SERIAL_PORT, SERIAL_BAUD, self.on_device_event)
+        self.pad = make_pad_link(self.on_device_event)
         # session_id -> {"slot": i, "tool_name": ..., "since": monotonic
         # timestamp, "escalated": bool}. Populated on PreToolUse when the
         # initial state is "working" (not already "question"/etc.),
@@ -408,13 +753,14 @@ class Daemon:
     #      `project` value and either/neither may actually be running
     #
     # Encoder events are still just logged; scrolling/paging is Phase
-    # 6 territory since NUM_SLOTS currently matches the pad's physical
-    # key count 1:1, so there's nothing to page through yet.
+    # 6 territory since self.slots.num_slots currently matches the
+    # pad's physical key count 1:1, so there's nothing to page through
+    # yet.
     def on_device_event(self, msg):
         t = msg.get("t")
         if t == "key":
             i = msg.get("i")
-            valid_index = i is not None and i < NUM_SLOTS
+            valid_index = i is not None and i < self.slots.num_slots
             session_id = self.slots.slot_to_session[i] if valid_index else None
             log.info("key %s -> session %s", i, session_id)
             if session_id is None:
@@ -463,9 +809,9 @@ class Daemon:
     def _dispatch_tmux(self, slot, pane):
         """Try tmux select-window. Returns True on success, False on
         any failure (falls through to VS Code dispatch if available).
-        Runs on PadLink's background reader thread (not the asyncio
-        event loop), so a blocking subprocess call here is fine — it
-        only stalls serial reads briefly, not hook processing.
+        Runs on the pad transport's background reader thread (not the
+        asyncio event loop), so a blocking subprocess call here is
+        fine — it only stalls pad reads briefly, not hook processing.
         """
         try:
             result = subprocess.run(
@@ -805,8 +1151,10 @@ class Daemon:
 
         i = self.slots.slot_for(session_id)
         if i is None:
-            # Hook arrived before SessionStart, we're past NUM_SLOTS
-            # concurrent sessions, or (confirmed 2026-08-02) the daemon
+            # Hook arrived before SessionStart, we're past the pad's
+            # slot capacity (self.slots.num_slots — sized from the
+            # handshake in serve(), see Phase 3), or (confirmed
+            # 2026-08-02) the daemon
             # was restarted mid-session so this process never saw that
             # session's SessionStart. Allocate lazily rather than drop
             # the event on the floor, and backfill project/pane here
@@ -919,12 +1267,43 @@ class Daemon:
         finally:
             writer.close()
 
+    def apply_handshake(self, handshake):
+        """Size self.slots from a pad's handshake() result (Phase 3),
+        so "if it supports 1, fine; if it supports 100, great" — the
+        daemon never hardcodes a number, it asks the hardware. Split
+        out from serve() so this decision is unit-testable without an
+        asyncio event loop.
+
+        Falls back to keeping __init__'s NUM_SLOTS-sized default if
+        `handshake` is None (headless, or the pad didn't answer in
+        time) — a best-effort capability query, not a hard
+        requirement. Any session mappings already recorded in the old
+        SlotManager are intentionally discarded: this only ever runs
+        once, before start_unix_server in serve(), so there aren't
+        any yet.
+        """
+        if handshake and handshake.get("slots"):
+            self.slots = SlotManager(handshake["slots"])
+            log.info(
+                "pad handshake reports %d slot(s) — resized SlotManager accordingly",
+                handshake["slots"],
+            )
+        else:
+            log.info(
+                "no slot-count handshake (headless, or pad didn't answer) — "
+                "using default NUM_SLOTS=%d", NUM_SLOTS,
+            )
+
     async def serve(self):
         sock_path = Path(SOCKET_PATH)
         if sock_path.exists():
             sock_path.unlink()
 
         self.pad.open()
+        # Must happen before start_unix_server below so no hook event
+        # can arrive and get mapped under the old (possibly wrong)
+        # sizing.
+        self.apply_handshake(self.pad.handshake())
 
         server = await asyncio.start_unix_server(
             self.handle_connection, path=str(sock_path)

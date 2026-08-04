@@ -167,8 +167,10 @@ def pad(monkeypatch):
 def recording_daemon(monkeypatch):
     """A Daemon() with pad.write_json replaced by a recorder, so tests
     can assert on what would've been sent to the pad without a real
-    serial connection. PadLink.open() is never called in these tests
-    (only serve() calls it), so no discovery probing happens either.
+    connection. The pad transport's open() is never called in these
+    tests (only serve() calls it), so no discovery probing happens
+    either, regardless of which PadTransport MACROPAD_TRANSPORT would
+    pick.
     """
     import daemon as daemon_mod
 
