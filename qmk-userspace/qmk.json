@@ -1,6 +1,7 @@
 {
     "userspace_version": "1.0",
     "build_targets": [
-        ["nuphy/air75_v2/ansi", "claude_macropad"]
+        ["nuphy/air75_v2/ansi", "claude_macropad"],
+        ["keychron/k1_pro/ansi/rgb", "claude_macropad"]
     ]
 }

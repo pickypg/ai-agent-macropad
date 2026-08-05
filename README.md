@@ -16,6 +16,14 @@ another QMK board should take little more than adding its own keymap
 dispatch logic are already keyboard-agnostic; see [QMK keyboard (NuPhy
 Air75 V2)](#qmk-keyboard-nuphy-air75-v2) for the pattern to follow.
 
+A third QMK board, the [Keychron K1
+Pro](https://www.keychron.com/products/keychron-k1-pro-qmk-via-wireless-custom-mechanical-keyboard)
+(ANSI), is also wired up, built against Keychron's own official
+firmware source — but **unverified on real hardware**, and needs one
+small source patch applied before it'll build; see [QMK keyboard
+(Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified)
+before relying on it.
+
 This repo covers the full path end to end: an example Claude Code
 `settings.json` wiring plus the hook script it invokes, a host-side
 daemon that speaks a small JSON protocol with the pad over USB serial
@@ -61,7 +69,7 @@ hasn't been tried.
 | `hid_protocol.py`                   | Wire-level binary report format for the HID transport (QMK-based pads) — see [Protocol](#protocol)        |
 | `fake_hooks.py`                     | Simulates a Claude Code session's hook events, for testing the daemon without real hooks wired up         |
 | `hid_bringup_test.py`               | Standalone hello/RGB round-trip check against a real QMK pad, independent of `daemon.py`                  |
-| `qmk-userspace/`                    | QMK userspace overlay, built against a separate local QMK checkout — `users/claude_macropad/` holds the protocol/state logic shared by every board's keymap; `keyboards/.../keymaps/claude_macropad/` holds each board's own layout, LED map, and device ID |
+| `qmk-userspace/`                    | QMK userspace overlay, built against a separate local QMK checkout — `users/claude_macropad/` holds the protocol/state logic shared by every board's keymap; `keyboards/.../keymaps/claude_macropad/` holds each board's own layout, LED map, and device ID. Keychron K1 Pro also ships `keyboards/keychron/k1_pro/k1_pro.c.patch`, a small patch applied to that board's own (unmodified-otherwise) firmware checkout — see [QMK keyboard (Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified) for why |
 | `requirements.txt`                  | Python dependencies for the daemon                                                                        |
 | `requirements-dev.txt`              | Adds `pytest` on top of `requirements.txt`, for running the test suite                                    |
 | `tests/`                            | `pytest` suite for `daemon.py` and `rp2040/code.py` (see [Testing](#testing))                             |
@@ -123,7 +131,10 @@ proven on the [NuPhy Air75 V2](https://nuphy.com/products/air75-v2);
 any other QMK board with per-key RGB matrix support (`RGB_MATRIX_ENABLE`)
 should work with a keymap of its own — see [QMK keyboard (NuPhy Air75
 V2)](#qmk-keyboard-nuphy-air75-v2) for the pattern to follow when
-porting to a different board.
+porting to a different board. A [Keychron K1
+Pro](https://www.keychron.com/products/keychron-k1-pro-qmk-via-wireless-custom-mechanical-keyboard)
+(ANSI) keymap is also included, but unverified — see [QMK keyboard
+(Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified).
 
 ## Setup
 
@@ -232,6 +243,66 @@ HID protocol and `dispatch_bring_to_front` logic itself is shared code in
 `claude_macropad` (i.e. still `-km claude_macropad`) so QMK's build picks up that shared
 `users/claude_macropad/` directory automatically.
 
+#### QMK keyboard (Keychron K1 Pro, unverified)
+
+**Unverified on real hardware.** Unlike the Air75 keymap above, nobody has built, flashed, or
+tested this one against a real board — treat everything below as a documented best-effort, not
+a confirmed working path. That said, it's built against Keychron's own official firmware source
+(the [`Keychron/qmk_firmware`](https://github.com/Keychron/qmk_firmware) fork, `wireless_playground`
+branch), not a third-party reverse-engineered one — the ANSI layout, matrix, RGB LED indices, and
+VID/PID all come directly from Keychron's real `keyboards/keychron/k1_pro/ansi/rgb/`, and the base
+keymap layers are Keychron's own stock K1 Pro keymap, unmodified except for the 4 AI-slot key
+substitutions. What's unverified is specifically "does it work on a real board" — not "is this
+guessed at."
+
+One small, unavoidable wrinkle: `k1_pro.c` (board-level code, shared by every keymap for this
+board — not something this repo's keymap directory touches) already defines `via_command_kb()`,
+the same raw-HID early-intercept hook the Air75 keymap uses directly, to handle two vendor
+commands (bluetooth DFU, factory test). A keymap can't also define `via_command_kb()` itself —
+duplicate strong symbol, hard link error — so this board needs one small patch applied to that
+file first, adding a new empty-by-default hook (`raw_hid_receive_kb()`) that `via_command_kb()`
+falls through to for anything it doesn't already claim, which is where this keymap's own
+`raw_hid_receive_kb()` (in `keymap.c`) plugs in. The patch is 12 lines, touches nothing any other
+keymap for this board relies on, and ships in this repo as a diff:
+
+```
+git clone --branch wireless_playground https://github.com/Keychron/qmk_firmware.git ../keychron-qmk-firmware
+cd ../keychron-qmk-firmware && git submodule update --init --recursive
+brew install qmk/qmk/qmk    # plus an ARM cross-compiler for this board's STM32L432
+qmk config user.qmk_home=../keychron-qmk-firmware
+
+git apply --directory=keyboards/keychron/k1_pro ../claude-macropad/qmk-userspace/keyboards/keychron/k1_pro/k1_pro.c.patch
+# (--directory prefixes the patch's relative path; drop it and cd into
+# ../keychron-qmk-firmware first if your git version doesn't support it)
+
+cd ../claude-macropad/qmk-userspace
+QMK_USERSPACE="$(pwd)" qmk compile -kb keychron/k1_pro/ansi/rgb -km claude_macropad
+```
+
+To flash, per [Keychron's own
+readme](https://github.com/Keychron/qmk_firmware/blob/wireless_playground/keyboards/keychron/k1_pro/readme.md):
+connect the USB-C cable, toggle the board's Mac/Win mode switch to **Off**, hold down **Esc**
+(or the reset button underneath the spacebar), then toggle the switch to **Cable**:
+
+```
+QMK_USERSPACE="$(pwd)" qmk flash -kb keychron/k1_pro/ansi/rgb -km claude_macropad
+```
+
+Then, same as the Air75 board, verify the wire protocol directly before trusting the daemon to
+it — `python3 hid_bringup_test.py` — and only move on once you've watched the real LEDs cycle
+through every state correctly.
+
+Slot wiring, VIA reassignment, and the VIA/daemon exclusivity rule are all the same as [the
+Air75 board above](#qmk-keyboard-nuphy-air75-v2) — same 4 default slots (PageUp/PageDn/Home/End),
+same `claude_macropad`-named keymap directory, same "stop the daemon before opening VIA" rule,
+same `via.json`-loading Design-tab step (load
+[this board's `via.json`](qmk-userspace/keyboards/keychron/k1_pro/ansi/rgb/keymaps/claude_macropad/via.json)
+instead, which extends Keychron's own official VIA definition for this board rather than
+replacing it). One difference: this board's 13 stock custom keycodes (left/right Option, left/right
+Cmd, Task View, File Explorer, Screenshot, Cortana, Siri, 3 bluetooth host slots, battery level)
+use up less of VIA's 32-entry `customKeycodes` budget than the Air75 board's 24 do, so all 12
+`AI_AGENT_KEY_0`..`11` slots are nameable ("AI Slot 0".."AI Slot 11"), not just 8 of them.
+
 ### 2. Run the daemon
 
 ```
@@ -248,9 +319,11 @@ USB serial devices for Adafruit's vendor ID, sending each a
 `{"t": "ping"}`, and attaching to whichever one answers
 `{"t": "hello", "device": "claude-macropad-v1"}` (see the `ping`/`hello`
 handshake in [`rp2040/code.py`](rp2040/code.py) and `discover_port()`
-in `daemon.py`) — then falls back to HID discovery for a QMK-based pad
-(e.g. a NuPhy Air75 V2). No need to look up `/dev/cu.usbmodem*` by hand
-or update it after a replug.
+in `daemon.py`) — then falls back to HID discovery for a QMK-based pad,
+trying each `(vid, pid)` pair in `KNOWN_HID_PADS` (NuPhy Air75 V2,
+Keychron K1 Pro) in turn via `discover_hid_pad()` until one answers.
+No need to look up `/dev/cu.usbmodem*` by hand or update it after a
+replug.
 
 Force one transport explicitly with `MACROPAD_TRANSPORT`, and/or skip
 serial discovery with `MACROPAD_SERIAL_PORT`:
@@ -497,6 +570,9 @@ pad now works end to end:
 - ✅ HID protocol to/from QMK keyboards (e.g. NuPhy Air75 V2), same auto-discovery
 - ✅ Slot allocation for concurrent sessions
 - ✅ Key-press → bring-window-to-front dispatch (macOS)
+- ⚠️ Keychron K1 Pro (ANSI) QMK keymap — written against Keychron's own official firmware
+  source, unverified on real hardware (see [QMK keyboard (Keychron K1 Pro,
+  unverified)](#qmk-keyboard-keychron-k1-pro-unverified))
 
 ## License
 

@@ -87,9 +87,14 @@ STATE_TO_CODE = {
 }
 CODE_TO_STATE = {v: k for k, v in STATE_TO_CODE.items()}
 
-# Placeholder until a second QMK board is actually in hand (see plan's
-# "explicitly out of scope" — multi-board support isn't needed yet).
+# Confirmed against NuPhy's own keyboard.json during Phase 0.
 DEVICE_ID_AIR75_V2 = 0xA7
+
+# Keychron K1 Pro (ANSI) — see qmk-userspace/keyboards/keychron/k1_pro/
+# ansi/rgb/keymaps/claude_macropad/keymap.c. Unlike DEVICE_ID_AIR75_V2,
+# this one hasn't been confirmed against real hardware — see that
+# keymap's and the README's Keychron K1 Pro section for why.
+DEVICE_ID_K1_PRO = 0xC1
 
 
 def pack_ping():

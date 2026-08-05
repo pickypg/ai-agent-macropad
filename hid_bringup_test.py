@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Minimal hello/RGB/key-press round-trip test against the real Air75 V2,
-independent of daemon.py's threading/discovery machinery — "Blink
-before Renderer": prove the wire protocol actually works on real
-hardware before trusting the full daemon stack to it.
+Minimal hello/RGB/key-press round-trip test against a real QMK pad
+(NuPhy Air75 V2 or Keychron K1 Pro — see KNOWN_HID_PADS), independent
+of daemon.py's threading/discovery machinery — "Blink before Renderer":
+prove the wire protocol actually works on real hardware before trusting
+the full daemon stack to it.
 
 Requires the claude_macropad keymap already flashed and the board
 plugged in over USB, in wired mode.
@@ -18,8 +19,14 @@ import hid
 
 import hid_protocol
 
-VID = 0x19F5
-PID = 0x3246
+# Deliberately duplicated from daemon.py's KNOWN_HID_PADS rather than
+# imported — this script stays standalone (no daemon.py import, so no
+# pyserial dependency just to run a HID-only bring-up check). Keep in
+# sync by hand if a pad's VID/PID changes or a new one is added.
+KNOWN_HID_PADS = (
+    (0x19F5, 0x3246),  # NuPhy Air75 V2 (ANSI)
+    (0x3434, 0x0210),  # Keychron K1 Pro (ANSI) — unverified, see README
+)
 RAW_USAGE_PAGE = 0xFF60
 RAW_USAGE_ID = 0x61
 
@@ -29,14 +36,17 @@ QUESTION_HOLD_SECONDS = 3.0  # longer, to see the blink
 
 
 def find_raw_hid_path():
-    candidates = [
-        d for d in hid.enumerate(VID, PID)
-        if d["usage_page"] == RAW_USAGE_PAGE and d["usage"] == RAW_USAGE_ID
-    ]
-    print(f"found {len(candidates)} raw-HID interface(s) at vid=0x{VID:04x} pid=0x{PID:04x}")
-    for d in candidates:
-        print(f"  path={d['path']!r} interface_number={d.get('interface_number')}")
-    return candidates[0]["path"] if candidates else None
+    for vid, pid in KNOWN_HID_PADS:
+        candidates = [
+            d for d in hid.enumerate(vid, pid)
+            if d["usage_page"] == RAW_USAGE_PAGE and d["usage"] == RAW_USAGE_ID
+        ]
+        print(f"found {len(candidates)} raw-HID interface(s) at vid=0x{vid:04x} pid=0x{pid:04x}")
+        for d in candidates:
+            print(f"  path={d['path']!r} interface_number={d.get('interface_number')}")
+        if candidates:
+            return candidates[0]["path"]
+    return None
 
 
 def do_handshake(dev):
@@ -111,7 +121,8 @@ def main():
             sys.exit(1)
 
         print(f"hello: device={reply['device']} slots={reply['slots']}")
-        if reply["device"] != hid_protocol.DEVICE_ID_AIR75_V2:
+        known_device_ids = (hid_protocol.DEVICE_ID_AIR75_V2, hid_protocol.DEVICE_ID_K1_PRO)
+        if reply["device"] not in known_device_ids:
             print(f"WARNING: unexpected device id {reply['device']!r}")
         num_slots = reply["slots"]
         print("PASS: hello round-trip OK")
