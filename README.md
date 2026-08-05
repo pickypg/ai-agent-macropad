@@ -263,7 +263,10 @@ duplicate strong symbol, hard link error — so this board needs one small patch
 file first, adding a new empty-by-default hook (`raw_hid_receive_kb()`) that `via_command_kb()`
 falls through to for anything it doesn't already claim, which is where this keymap's own
 `raw_hid_receive_kb()` (in `keymap.c`) plugs in. The patch is 12 lines, touches nothing any other
-keymap for this board relies on, and ships in this repo as a diff:
+keymap for this board relies on, and ships in this repo as a diff. It's also been submitted
+upstream as [Keychron/qmk_firmware#506](https://github.com/Keychron/qmk_firmware/pull/506) — if
+that gets merged, this manual step goes away for anyone building against a checkout that
+includes it; worth checking before you patch by hand.
 
 ```
 git clone --branch wireless_playground https://github.com/Keychron/qmk_firmware.git ../keychron-qmk-firmware
