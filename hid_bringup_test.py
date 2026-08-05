@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 Minimal hello/RGB/key-press round-trip test against a real QMK pad
-(NuPhy Air75 V2 or Keychron K1 Pro — see KNOWN_HID_PADS), independent
-of daemon.py's threading/discovery machinery — "Blink before Renderer":
-prove the wire protocol actually works on real hardware before trusting
-the full daemon stack to it.
+(NuPhy Air75 V2 or Keychron K1 Pro — see hid_protocol.KNOWN_HID_PADS),
+independent of daemon.py's threading/discovery machinery — "Blink
+before Renderer": prove the wire protocol actually works on real
+hardware before trusting the full daemon stack to it.
 
 Requires the claude_macropad keymap already flashed and the board
 plugged in over USB, in wired mode.
@@ -19,14 +19,6 @@ import hid
 
 import hid_protocol
 
-# Deliberately duplicated from daemon.py's KNOWN_HID_PADS rather than
-# imported — this script stays standalone (no daemon.py import, so no
-# pyserial dependency just to run a HID-only bring-up check). Keep in
-# sync by hand if a pad's VID/PID changes or a new one is added.
-KNOWN_HID_PADS = (
-    (0x19F5, 0x3246),  # NuPhy Air75 V2 (ANSI)
-    (0x3434, 0x0210),  # Keychron K1 Pro (ANSI) — unverified, see README
-)
 RAW_USAGE_PAGE = 0xFF60
 RAW_USAGE_ID = 0x61
 
@@ -36,12 +28,12 @@ QUESTION_HOLD_SECONDS = 3.0  # longer, to see the blink
 
 
 def find_raw_hid_path():
-    for vid, pid in KNOWN_HID_PADS:
+    for pad in hid_protocol.KNOWN_HID_PADS:
         candidates = [
-            d for d in hid.enumerate(vid, pid)
+            d for d in hid.enumerate(pad.vid, pad.pid)
             if d["usage_page"] == RAW_USAGE_PAGE and d["usage"] == RAW_USAGE_ID
         ]
-        print(f"found {len(candidates)} raw-HID interface(s) at vid=0x{vid:04x} pid=0x{pid:04x}")
+        print(f"found {len(candidates)} raw-HID interface(s) for {pad.name} (vid=0x{pad.vid:04x} pid=0x{pad.pid:04x})")
         for d in candidates:
             print(f"  path={d['path']!r} interface_number={d.get('interface_number')}")
         if candidates:

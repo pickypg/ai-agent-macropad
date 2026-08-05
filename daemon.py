@@ -87,29 +87,6 @@ ADAFRUIT_USB_VID = 0x239A
 # Must match DEVICE_ID in rp2040/code.py's "hello" response.
 PAD_DEVICE_ID = "claude-macropad-v1"
 
-# USB VID/PID for the NuPhy Air75 V2 (ANSI), confirmed against NuPhy's
-# own keyboard.json during Phase 0. Unlike ADAFRUIT_USB_VID above,
-# this alone disambiguates the board — no shared-vendor-ID ambiguity
-# to resolve the way serial discovery has to.
-NUPHY_USB_VID = 0x19F5
-NUPHY_USB_PID = 0x3246
-
-# USB VID/PID for the Keychron K1 Pro (ANSI), read directly from
-# Keychron's own keyboards/keychron/k1_pro/ansi/rgb/info.json (VID is
-# also shared across their whole QMK line) — see hid_protocol.py's
-# DEVICE_ID_K1_PRO and the README's Keychron K1 Pro section for why
-# this pad is still unverified against real hardware despite that.
-KEYCHRON_K1_PRO_USB_VID = 0x3434
-KEYCHRON_K1_PRO_USB_PID = 0x0210
-
-# Every QMK-based pad HID discovery knows how to look for, tried in
-# this order by discover_hid_pad() — add a (vid, pid) pair here for
-# any future board rather than hardcoding just one, the way a single
-# NuPhy Air75 V2 pair used to be assumed throughout this module.
-KNOWN_HID_PADS = (
-    (NUPHY_USB_VID, NUPHY_USB_PID),
-    (KEYCHRON_K1_PRO_USB_VID, KEYCHRON_K1_PRO_USB_PID),
-)
 
 # QMK's raw HID usage page/usage (RAW_USAGE_PAGE/RAW_USAGE_ID defaults
 # in tmk_core/protocol/usb_descriptor_common.h) — narrows HID discovery
@@ -383,9 +360,9 @@ def discover_hid_device(vid, pid, handshake_timeout=1.5):
     return None
 
 
-def discover_hid_pad(candidates=KNOWN_HID_PADS, handshake_timeout=1.5):
-    """Tries each (vid, pid) pair in `candidates` in turn via
-    discover_hid_device(), returning (path, vid, pid) for whichever one
+def discover_hid_pad(candidates=hid_protocol.KNOWN_HID_PADS, handshake_timeout=1.5):
+    """Tries each hid_protocol.KnownPad in `candidates` in turn via
+    discover_hid_device(), returning (path, pad) for whichever one
     answers hello first, or None if none do. Lets HidPadLink
     auto-detect which known QMK pad (if any) is plugged in, the same
     way discover_port() doesn't need to be told which serial board to
@@ -393,10 +370,10 @@ def discover_hid_pad(candidates=KNOWN_HID_PADS, handshake_timeout=1.5):
     """
     if hid is None:
         return None
-    for vid, pid in candidates:
-        path = discover_hid_device(vid, pid, handshake_timeout=handshake_timeout)
+    for pad in candidates:
+        path = discover_hid_device(pad.vid, pad.pid, handshake_timeout=handshake_timeout)
         if path:
-            return path, vid, pid
+            return path, pad
     return None
 
 
@@ -634,13 +611,16 @@ class HidPadLink(PadTransport):
 
     def __init__(self, on_device_event, vid=None, pid=None, on_reattach=None):
         super().__init__(on_device_event, on_reattach)
-        # An explicit vid/pid pins discovery to just that one board;
-        # otherwise try every board this module knows about (see
-        # KNOWN_HID_PADS) and attach to whichever one actually answers.
-        # self.vid/self.pid start as whatever was passed in (possibly
-        # None) and get set to the pad that actually answered once
-        # open()/_reconnect() succeeds.
-        self.candidates = [(vid, pid)] if vid is not None and pid is not None else list(KNOWN_HID_PADS)
+        # An explicit vid/pid pins discovery to just that one (unnamed)
+        # board; otherwise try every board this module knows about (see
+        # hid_protocol.KNOWN_HID_PADS) and attach to whichever one
+        # actually answers. self.vid/self.pid start as whatever was
+        # passed in (possibly None) and get set to the pad that
+        # actually answered once open()/_reconnect() succeeds.
+        if vid is not None and pid is not None:
+            self.candidates = (hid_protocol.KnownPad(None, vid, pid, None),)
+        else:
+            self.candidates = hid_protocol.KNOWN_HID_PADS
         self.vid = vid
         self.pid = pid
         self._dev = None
@@ -657,12 +637,13 @@ class HidPadLink(PadTransport):
         found = discover_hid_pad(self.candidates)
         if not found:
             log.warning(
-                "no known HID pad found (tried vid/pid: %s) — running headless "
+                "no known HID pad found (tried: %s) — running headless "
                 "(plug in the pad, or check MACROPAD_TRANSPORT)",
-                ", ".join("0x%04x/0x%04x" % c for c in self.candidates),
+                ", ".join("%s (0x%04x/0x%04x)" % (p.name or "unnamed", p.vid, p.pid) for p in self.candidates),
             )
             return
-        path, self.vid, self.pid = found
+        path, pad = found
+        self.vid, self.pid = pad.vid, pad.pid
         try:
             self._dev = hid.Device(path=path)
         except hid.HIDException:
@@ -746,7 +727,8 @@ class HidPadLink(PadTransport):
         while not self._stop.is_set():
             found = discover_hid_pad(self.candidates)
             if found:
-                path, self.vid, self.pid = found
+                path, pad = found
+                self.vid, self.pid = pad.vid, pad.pid
                 try:
                     self._dev = hid.Device(path=path)
                     self.attached = True

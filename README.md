@@ -323,7 +323,7 @@ USB serial devices for Adafruit's vendor ID, sending each a
 `{"t": "hello", "device": "claude-macropad-v1"}` (see the `ping`/`hello`
 handshake in [`rp2040/code.py`](rp2040/code.py) and `discover_port()`
 in `daemon.py`) — then falls back to HID discovery for a QMK-based pad,
-trying each `(vid, pid)` pair in `KNOWN_HID_PADS` (NuPhy Air75 V2,
+trying each board in `hid_protocol.KNOWN_HID_PADS` (NuPhy Air75 V2,
 Keychron K1 Pro) in turn via `discover_hid_pad()` until one answers.
 No need to look up `/dev/cu.usbmodem*` by hand or update it after a
 replug.

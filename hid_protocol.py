@@ -41,6 +41,8 @@ MSG_KEY    (device -> host): byte 1 = slot index. Sent only on
             concept to consume one anyway.
 """
 
+from collections import namedtuple
+
 REPORT_SIZE = 32  # QMK's RAW_EPSIZE default for ChibiOS boards (confirmed unchanged in
                    # NuPhy's fork during Phase 0 — see keyboards/nuphy/air75_v2/ansi/)
 
@@ -95,6 +97,24 @@ DEVICE_ID_AIR75_V2 = 0xA7
 # this one hasn't been confirmed against real hardware — see that
 # keymap's and the README's Keychron K1 Pro section for why.
 DEVICE_ID_K1_PRO = 0xC1
+
+# Single source of truth for every known QMK HID pad's identity: `vid`/
+# `pid` for USB discovery (daemon.py's discover_hid_pad()), `device_id`
+# for the MSG_HELLO handshake byte above. Previously vid/pid lived in
+# daemon.py and device_id lived here, with hid_bringup_test.py keeping
+# a third, hand-duplicated copy of vid/pid alongside (deliberately, to
+# avoid importing daemon.py's pyserial dependency) — daemon.py and
+# hid_bringup_test.py both import this module already regardless, so
+# there's no longer a reason for any of them to keep their own copy.
+KnownPad = namedtuple("KnownPad", ["name", "vid", "pid", "device_id"])
+
+NUPHY_AIR75_V2 = KnownPad("NuPhy Air75 V2 (ANSI)", 0x19F5, 0x3246, DEVICE_ID_AIR75_V2)
+KEYCHRON_K1_PRO = KnownPad("Keychron K1 Pro (ANSI)", 0x3434, 0x0210, DEVICE_ID_K1_PRO)
+
+# Tried in this order by daemon.py's discover_hid_pad() — add a new
+# KnownPad here for any future board rather than hardcoding its VID/PID
+# somewhere else.
+KNOWN_HID_PADS = (NUPHY_AIR75_V2, KEYCHRON_K1_PRO)
 
 
 def pack_ping():

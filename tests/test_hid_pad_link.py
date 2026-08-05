@@ -73,7 +73,7 @@ def make_fake_hid(devices, responses=None, open_failures=None):
     return types.SimpleNamespace(enumerate=enumerate, Device=Device, HIDException=FakeHidException)
 
 
-def make_candidate(path, vid=daemon.NUPHY_USB_VID, pid=daemon.NUPHY_USB_PID,
+def make_candidate(path, vid=hid_protocol.NUPHY_AIR75_V2.vid, pid=hid_protocol.NUPHY_AIR75_V2.pid,
                     usage_page=daemon.RAW_USAGE_PAGE, usage=daemon.RAW_USAGE_ID):
     return {
         "path": path, "vendor_id": vid, "product_id": pid,
@@ -90,7 +90,7 @@ def hello_report(device_id=hid_protocol.DEVICE_ID_AIR75_V2, slots=16):
 def test_discover_hid_device_returns_none_with_no_candidates(monkeypatch):
     fake = make_fake_hid([])
     monkeypatch.setattr(daemon, "hid", fake)
-    assert daemon.discover_hid_device(daemon.NUPHY_USB_VID, daemon.NUPHY_USB_PID) is None
+    assert daemon.discover_hid_device(hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid) is None
 
 
 def test_discover_hid_device_ignores_wrong_usage_page(monkeypatch):
@@ -99,7 +99,7 @@ def test_discover_hid_device_ignores_wrong_usage_page(monkeypatch):
     devices = [make_candidate(b"iface0", usage_page=0x0001, usage=0x06)]
     fake = make_fake_hid(devices)
     monkeypatch.setattr(daemon, "hid", fake)
-    assert daemon.discover_hid_device(daemon.NUPHY_USB_VID, daemon.NUPHY_USB_PID) is None
+    assert daemon.discover_hid_device(hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid) is None
 
 
 def test_discover_hid_device_picks_interface_that_replies_hello(monkeypatch):
@@ -109,7 +109,7 @@ def test_discover_hid_device_picks_interface_that_replies_hello(monkeypatch):
     monkeypatch.setattr(daemon, "hid", fake)
 
     assert daemon.discover_hid_device(
-        daemon.NUPHY_USB_VID, daemon.NUPHY_USB_PID, handshake_timeout=0.05
+        hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid, handshake_timeout=0.05
     ) == b"iface1"
 
 
@@ -120,7 +120,7 @@ def test_discover_hid_device_skips_interface_that_fails_to_open(monkeypatch):
     monkeypatch.setattr(daemon, "hid", fake)
 
     assert daemon.discover_hid_device(
-        daemon.NUPHY_USB_VID, daemon.NUPHY_USB_PID, handshake_timeout=0.05
+        hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid, handshake_timeout=0.05
     ) == b"iface1"
 
 
@@ -130,13 +130,13 @@ def test_discover_hid_device_returns_none_when_nothing_replies(monkeypatch):
     monkeypatch.setattr(daemon, "hid", fake)
 
     assert daemon.discover_hid_device(
-        daemon.NUPHY_USB_VID, daemon.NUPHY_USB_PID, handshake_timeout=0.05
+        hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid, handshake_timeout=0.05
     ) is None
 
 
 def test_discover_hid_device_returns_none_when_hid_unavailable(monkeypatch):
     monkeypatch.setattr(daemon, "hid", None)
-    assert daemon.discover_hid_device(daemon.NUPHY_USB_VID, daemon.NUPHY_USB_PID) is None
+    assert daemon.discover_hid_device(hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid) is None
 
 
 # --- HidPadLink --------------------------------------------------------
