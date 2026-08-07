@@ -80,6 +80,15 @@ SERIAL_BAUD = 115200
 NUM_SLOTS = 12
 EVENTS_LOG_PATH = str(CONFIG_DIR / "events.log")
 
+# asyncio's StreamReader defaults to a 64KiB readline() limit. hook.sh
+# forwards whole hook payloads (e.g. PostToolUse for Read/Grep/Bash,
+# which embeds tool_response) as a single line, and those routinely
+# exceed 64KiB for a large file or command output, so the default
+# blows up handle_connection with LimitOverrunError. 8MiB comfortably
+# covers even large tool outputs without letting one runaway line
+# stall the daemon.
+SOCKET_READ_LIMIT = 8 * 1024 * 1024
+
 # USB vendor ID shared by every CircuitPython board (Adafruit's), used
 # to narrow the auto-discovery scan below before it probes anything.
 ADAFRUIT_USB_VID = 0x239A
@@ -1383,7 +1392,21 @@ class Daemon:
     async def handle_connection(self, reader, writer):
         try:
             while True:
-                line = await reader.readline()
+                try:
+                    line = await reader.readline()
+                except ValueError:
+                    # Line exceeded SOCKET_READ_LIMIT before a newline
+                    # was found (asyncio.LimitOverrunError, re-raised
+                    # by StreamReader.readline() as ValueError). The
+                    # oversized data is still sitting in the buffer, so
+                    # drop this connection instead of looping on the
+                    # same unreadable line.
+                    log.warning(
+                        "hook payload exceeded %d-byte socket read limit; dropping connection",
+                        SOCKET_READ_LIMIT,
+                    )
+                    events_log.info("READ_LIMIT_EXCEEDED limit=%d", SOCKET_READ_LIMIT)
+                    break
                 if not line:
                     break
                 line = line.strip()
@@ -1446,7 +1469,7 @@ class Daemon:
         self.apply_handshake(self.pad.handshake())
 
         server = await asyncio.start_unix_server(
-            self.handle_connection, path=str(sock_path)
+            self.handle_connection, path=str(sock_path), limit=SOCKET_READ_LIMIT
         )
         log.info("listening on %s", SOCKET_PATH)
 
