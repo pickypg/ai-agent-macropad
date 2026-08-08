@@ -39,6 +39,15 @@ Requires: pip install pyserial. HID transport additionally requires
 pip install hid, plus the native hidapi library (e.g. brew install
 hidapi on macOS) — optional: daemon.py runs fine without either
 installed, it just can't attach over HID.
+
+At startup, before the socket starts accepting hook events, the
+daemon also seeds slots for any Claude Code sessions that were
+already running (e.g. a daemon restart mid-session) via `claude
+agents --json` — see discover_running_sessions() and
+Daemon.seed_existing_sessions() below. Requires Claude Code >=2.1.224;
+an older CLI (or no `claude` on PATH) just means seeding finds nothing
+and pre-existing sessions fall back to the pre-existing
+lazy-allocation-on-first-hook-event behavior instead.
 """
 import asyncio
 import json
@@ -79,6 +88,15 @@ SERIAL_PORT = os.environ.get("MACROPAD_SERIAL_PORT")  # e.g. /dev/tty.usbmodem14
 SERIAL_BAUD = 115200
 NUM_SLOTS = 12
 EVENTS_LOG_PATH = str(CONFIG_DIR / "events.log")
+
+# asyncio's StreamReader defaults to a 64KiB readline() limit. hook.sh
+# forwards whole hook payloads (e.g. PostToolUse for Read/Grep/Bash,
+# which embeds tool_response) as a single line, and those routinely
+# exceed 64KiB for a large file or command output, so the default
+# blows up handle_connection with LimitOverrunError. 8MiB comfortably
+# covers even large tool outputs without letting one runaway line
+# stall the daemon.
+SOCKET_READ_LIMIT = 8 * 1024 * 1024
 
 # USB vendor ID shared by every CircuitPython board (Adafruit's), used
 # to narrow the auto-discovery scan below before it probes anything.
@@ -170,7 +188,7 @@ def hook_to_state(event_name, tool_name=None, notification_type=None):
     return {
         "SessionStart": "idle",
         "UserPromptSubmit": "working",
-        "PreToolUse": "working",
+        "PreToolUse": "tool_running",
         "PostToolUse": "working",
         "PostToolUseFailure": "error",
         "Stop": "done",
@@ -806,6 +824,92 @@ def make_pad_link(on_device_event, on_reattach=None):
     return AutoPadLink(on_device_event, on_reattach)
 
 
+# --- Existing session discovery -----------------------------------------
+#
+# A restarted daemon (or one started after Claude Code sessions are
+# already open) otherwise has no slots until each pre-existing session
+# happens to fire some hook event — see the lazy-allocation fallback
+# in handle_hook_event, added for exactly this case. `claude agents
+# --json` (Claude Code >=2.1.224) prints every currently-active
+# session — interactive and background — as a JSON array with at
+# least pid/cwd/sessionId, letting the daemon seed slots for all of
+# them at startup instead of waiting. Best-effort: an older CLI, no
+# `claude` on PATH, or any parse failure just means an empty list,
+# same headless-friendly posture as pad discovery elsewhere in this
+# file.
+
+def discover_running_sessions():
+    try:
+        result = subprocess.run(
+            ["claude", "agents", "--json"],
+            capture_output=True, timeout=5, text=True,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log.info("could not query running Claude Code sessions: %s", e)
+        return []
+    if result.returncode != 0:
+        log.info(
+            "`claude agents --json` exited %d: %s",
+            result.returncode, result.stderr.strip(),
+        )
+        return []
+    try:
+        sessions = json.loads(result.stdout)
+    except ValueError:
+        log.warning(
+            "bad JSON from `claude agents --json`: %r", result.stdout[:200]
+        )
+        return []
+    if not isinstance(sessions, list):
+        log.warning("unexpected `claude agents --json` output shape: %r", sessions)
+        return []
+    return sessions
+
+
+def _controlling_tty(pid):
+    """Best-effort equivalent of hook.sh's SessionStart tty lookup (see
+    its docstring), run directly against a session's own pid instead of
+    a hook subprocess's parent — there's no hook invocation to piggyback
+    on for a session the daemon didn't see start. Returns None for a
+    dead pid or one with no controlling terminal (e.g. VS Code's
+    integrated terminal, same as hook.sh's "??" case).
+    """
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "tty=", "-p", str(pid)],
+            capture_output=True, timeout=2, text=True,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    tty = result.stdout.strip()
+    if not tty or tty == "??":
+        return None
+    return f"/dev/{tty}"
+
+
+def _tmux_pane_for_tty(tty):
+    """Cross-references a controlling tty against every tmux pane on the
+    machine to recover the pane id hook.sh would otherwise report via
+    $TMUX_PANE — only meaningful when _controlling_tty() above actually
+    found one. Best-effort: no tmux on PATH, or no server running, just
+    means no match.
+    """
+    try:
+        result = subprocess.run(
+            ["tmux", "list-panes", "-a", "-F", "#{pane_tty} #{pane_id}"],
+            capture_output=True, timeout=2, text=True,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        pane_tty, _, pane_id = line.partition(" ")
+        if pane_tty == tty:
+            return pane_id
+    return None
+
+
 # --- Daemon: socket server + hook->state logic -------------------------
 
 # Notification:permission_prompt is known to be unreliable — it can
@@ -1329,11 +1433,20 @@ class Daemon:
             if i is None:
                 events_log.info("DROPPED reason=no_free_slot")
                 return
+            label = Path(payload.get("cwd", "")).name or session_id[:8]
+            self.session_projects[session_id] = label
+
+        # Backfill tmux_pane from whichever hook event happens to be the
+        # first one this daemon process sees for the session, even if a
+        # slot was already allocated above — seed_existing_sessions()
+        # can allocate a slot for a session at startup without ever
+        # learning its pane (claude agents --json has no tmux info), so
+        # this can't be folded into the "i is None" branch above without
+        # leaving those sessions permanently pane-less.
+        if session_id not in self.session_panes:
             pane = payload.get("tmux_pane")
             if pane:
                 self.session_panes[session_id] = pane
-            label = Path(payload.get("cwd", "")).name or session_id[:8]
-            self.session_projects[session_id] = label
 
         state = hook_to_state(
             event_name, payload.get("tool_name"), payload.get("notification_type")
@@ -1343,7 +1456,7 @@ class Daemon:
         # event changes the displayed state. See STALL_THRESHOLD_SECONDS
         # for why this exists: Notification:permission_prompt can't be
         # trusted to fire on its own.
-        if event_name == "PreToolUse" and state == "working":
+        if event_name == "PreToolUse" and state == "tool_running":
             self.pending_calls[session_id] = {
                 "slot": i,
                 "tool_name": payload.get("tool_name"),
@@ -1372,15 +1485,20 @@ class Daemon:
         events_log.info("MAPPED slot=%s state=%s event=%s", i, state, event_name)
 
     async def watch_stalled_calls(self):
-        """Backstop for Notification:permission_prompt's unreliability.
+        """Backstop for Notification:permission_prompt's unreliability —
+        and for tool calls that are just taking a while.
 
         Polls pending_calls once a second; anything sitting past
         STALL_THRESHOLD_SECONDS without a PostToolUse/PostToolUseFailure
-        gets escalated to "question" exactly once. No further action
-        needed on the daemon's part after that — the normal PostToolUse
-        handling in handle_hook_event already downgrades back to
-        "working"/"done" whenever the tool call actually finishes,
-        whether or not it was escalated first.
+        gets escalated to "tool_stalled" (blinking purple) exactly once.
+        This deliberately does NOT claim "question" (blocked, needs your
+        input) — we don't actually know whether this is an unreported
+        permission prompt or just a slow tool, so "still purple, just
+        been a while" is the honest signal. No further action needed on
+        the daemon's part after that — the normal PostToolUse handling
+        in handle_hook_event already downgrades back to "working"/"done"
+        whenever the tool call actually finishes, whether or not it was
+        escalated first.
         """
         if STALL_THRESHOLD_SECONDS is None:
             return
@@ -1393,20 +1511,34 @@ class Daemon:
                 if now - pending["since"] < STALL_THRESHOLD_SECONDS:
                     continue
                 pending["escalated"] = True
-                self._send_pad({"t": "slot", "i": pending["slot"], "state": "question"})
+                self._send_pad({"t": "slot", "i": pending["slot"], "state": "tool_stalled"})
                 events_log.info(
-                    "MAPPED slot=%s state=question event=stall_detected tool=%s elapsed=%.1fs",
+                    "MAPPED slot=%s state=tool_stalled event=stall_detected tool=%s elapsed=%.1fs",
                     pending["slot"], pending["tool_name"], now - pending["since"],
                 )
                 log.info(
-                    "stall detected: session=%s tool=%s elapsed=%.1fs — escalating to question",
+                    "stall detected: session=%s tool=%s elapsed=%.1fs — escalating to tool_stalled",
                     session_id, pending["tool_name"], now - pending["since"],
                 )
 
     async def handle_connection(self, reader, writer):
         try:
             while True:
-                line = await reader.readline()
+                try:
+                    line = await reader.readline()
+                except ValueError:
+                    # Line exceeded SOCKET_READ_LIMIT before a newline
+                    # was found (asyncio.LimitOverrunError, re-raised
+                    # by StreamReader.readline() as ValueError). The
+                    # oversized data is still sitting in the buffer, so
+                    # drop this connection instead of looping on the
+                    # same unreadable line.
+                    log.warning(
+                        "hook payload exceeded %d-byte socket read limit; dropping connection",
+                        SOCKET_READ_LIMIT,
+                    )
+                    events_log.info("READ_LIMIT_EXCEEDED limit=%d", SOCKET_READ_LIMIT)
+                    break
                 if not line:
                     break
                 line = line.strip()
@@ -1429,6 +1561,52 @@ class Daemon:
                 self.handle_hook_event(payload)
         finally:
             writer.close()
+
+    def seed_existing_sessions(self):
+        """Pre-populate slots from `claude agents --json` (see
+        discover_running_sessions() above) so sessions already running
+        when this daemon starts show up on the pad immediately, instead
+        of staying blank until they happen to fire a hook event. Called
+        once from serve(), before the socket starts accepting hook
+        events, so there's no race with handle_hook_event's own
+        slot_for()/allocate() calls.
+
+        Seeds state="idle" unconditionally rather than guessing — the
+        daemon has no way to know if a pre-existing session is mid-tool-
+        call or waiting on you, and the next real hook event corrects it
+        momentarily either way.
+        """
+        sessions = discover_running_sessions()
+        for s in sessions:
+            session_id = s.get("sessionId")
+            if not session_id:
+                continue
+            i = self.slots.allocate(session_id)
+            if i is None:
+                continue
+            label = Path(s.get("cwd", "")).name or session_id[:8]
+            self.session_projects[session_id] = label
+
+            tty = None
+            pid = s.get("pid")
+            if pid:
+                tty = _controlling_tty(pid)
+            if tty:
+                self.session_ttys[session_id] = tty
+                pane = _tmux_pane_for_tty(tty)
+                if pane:
+                    self.session_panes[session_id] = pane
+
+            self._send_pad({"t": "slot", "i": i, "state": "idle", "label": label})
+            events_log.info(
+                "MAPPED slot=%s state=idle pane=%s tty=%s project=%s (seeded at startup)",
+                i, self.session_panes.get(session_id, "<none>"), tty or "<none>", label,
+            )
+        if sessions:
+            log.info(
+                "seeded %d pre-existing session(s) from `claude agents --json`",
+                len(sessions),
+            )
 
     def apply_handshake(self, handshake):
         """Size self.slots from a pad's handshake() result (Phase 3),
@@ -1467,9 +1645,14 @@ class Daemon:
         # can arrive and get mapped under the old (possibly wrong)
         # sizing.
         self.apply_handshake(self.pad.handshake())
+        # Also before start_unix_server: seeds slots from sessions
+        # already running, so there's no race with a hook event for one
+        # of them arriving and hitting handle_hook_event's own
+        # allocate() first.
+        self.seed_existing_sessions()
 
         server = await asyncio.start_unix_server(
-            self.handle_connection, path=str(sock_path)
+            self.handle_connection, path=str(sock_path), limit=SOCKET_READ_LIMIT
         )
         log.info("listening on %s", SOCKET_PATH)
 

@@ -129,6 +129,14 @@ bool claude_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t devi
             if (length < 3) return true;  // ours, just malformed — drop it
             uint8_t index = data[1];
             uint8_t state = data[2];
+            // state <= STATE_OFF is a coarse "in the reserved wire
+            // range" check, not "a state this firmware recognizes" —
+            // STATE_OFF is pinned well above the states actually
+            // defined today (see the enum), so this happily accepts
+            // states added by a newer daemon than this firmware build.
+            // state_to_rgb() is what decides whether a given value is
+            // actually a known case or falls through to the "unknown"
+            // fallback color.
             if (index < num_slots && index < CLAUDE_MACROPAD_MAX_SLOTS && state <= STATE_OFF) {
                 slot_states[index] = state;
             }
@@ -140,24 +148,31 @@ bool claude_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t devi
 }
 
 // Mirrors STATE_COLORS in rp2040/code.py 1:1 — including "off" (fully
-// dark) being visually distinct from "idle" (dim gray glow).
+// dark) being visually distinct from "idle" (dim gray glow), and
+// "unknown" (magenta) for a state byte in the valid wire range (see
+// raw_hid_receive) that isn't one of the cases below — e.g. this
+// firmware build predates a state the daemon has since added. Magenta
+// rather than falling back to idle's gray, so version skew is visually
+// obvious instead of quietly looking like nothing's happening.
 static void state_to_rgb(uint8_t state, uint8_t *r, uint8_t *g, uint8_t *b) {
     switch (state) {
-        case STATE_WORKING:  *r = 0;   *g = 0;   *b = 255; break;
-        case STATE_WAITING:  *r = 255; *g = 170; *b = 0;   break;
-        case STATE_DONE:     *r = 0;   *g = 255; *b = 0;   break;
-        case STATE_ERROR:    *r = 255; *g = 0;   *b = 0;   break;
-        case STATE_QUESTION: *r = 255; *g = 127; *b = 0;   break;
-        case STATE_OFF:       *r = 0;   *g = 0;   *b = 0;   break;
-        case STATE_IDLE:
-        default:              *r = 40;  *g = 40;  *b = 40;  break;
+        case STATE_IDLE:          *r = 40;  *g = 40;  *b = 40;  break;
+        case STATE_WORKING:       *r = 0;   *g = 0;   *b = 255; break;
+        case STATE_WAITING:       *r = 255; *g = 170; *b = 0;   break;
+        case STATE_DONE:          *r = 0;   *g = 255; *b = 0;   break;
+        case STATE_ERROR:         *r = 255; *g = 0;   *b = 0;   break;
+        case STATE_QUESTION:      *r = 255; *g = 127; *b = 0;   break;
+        case STATE_TOOL_RUNNING:  *r = 128; *g = 0;   *b = 255; break;
+        case STATE_TOOL_STALLED:  *r = 128; *g = 0;   *b = 255; break;
+        case STATE_OFF:           *r = 0;   *g = 0;   *b = 0;   break;
+        default:                  *r = 255; *g = 0;   *b = 255; break;
     }
 }
 
-// "question" blinks, same as rp2040/code.py's BLINK_STATES/
-// BLINK_PERIOD (500ms on/off) — derived from the free-running frame
-// timer rather than tracked state, since this runs every RGB matrix
-// tick already.
+// "question" and "tool_stalled" blink, same as rp2040/code.py's
+// BLINK_STATES/BLINK_PERIOD (500ms on/off) — derived from the
+// free-running frame timer rather than tracked state, since this runs
+// every RGB matrix tick already.
 void claude_macropad_paint_indicators(uint8_t num_slots) {
     bool blink_on = (timer_read32() / 500) % 2 == 0;
 
@@ -172,7 +187,7 @@ void claude_macropad_paint_indicators(uint8_t num_slots) {
 
         uint8_t state = slot_states[i];
         uint8_t r, g, b;
-        if (state == STATE_QUESTION && !blink_on) {
+        if ((state == STATE_QUESTION || state == STATE_TOOL_STALLED) && !blink_on) {
             r = g = b = 0;
         } else {
             state_to_rgb(state, &r, &g, &b);

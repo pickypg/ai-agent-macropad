@@ -5,10 +5,13 @@ def test_session_start_maps_to_idle():
     assert daemon.hook_to_state("SessionStart") == "idle"
 
 
-def test_prompt_and_tool_use_map_to_working():
+def test_prompt_and_posttooluse_map_to_working():
     assert daemon.hook_to_state("UserPromptSubmit") == "working"
-    assert daemon.hook_to_state("PreToolUse", tool_name="Read") == "working"
     assert daemon.hook_to_state("PostToolUse", tool_name="Read") == "working"
+
+
+def test_pretooluse_maps_to_tool_running():
+    assert daemon.hook_to_state("PreToolUse", tool_name="Read") == "tool_running"
 
 
 def test_attention_tools_escalate_pretooluse_to_question():

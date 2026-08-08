@@ -43,19 +43,29 @@ NUM_SLOTS = 12
 DEVICE_ID = "claude-macropad-v1"
 
 STATE_COLORS = {
-    "idle":     (40, 40, 40),
-    "working":  (0, 0, 255),
-    "waiting":  (255, 170, 0),
-    "done":     (0, 255, 0),
-    "error":    (255, 0, 0),
-    "question": (255, 127, 0),
-    "off":      (0, 0, 0),
+    "idle":         (40, 40, 40),
+    "working":      (0, 0, 255),
+    "waiting":      (255, 170, 0),
+    "done":         (0, 255, 0),
+    "error":        (255, 0, 0),
+    "question":     (255, 127, 0),
+    "tool_running": (128, 0, 255),
+    "tool_stalled": (128, 0, 255),
+    "off":          (0, 0, 0),
+    # Fallback for a state name this build doesn't recognize — e.g. a
+    # newer daemon.py sent a state added after this firmware was
+    # flashed. Magenta rather than reusing "off"'s color (pixel_color()'s
+    # old fallback), so version skew is visually obvious instead of a
+    # slot quietly looking cleared/idle.
+    "unknown":      (255, 0, 255),
 }
 
-# States that blink rather than show a solid color — just "question" for
-# now, so it reads as distinct from "waiting" at a glance despite the two
-# sharing a similarly warm color.
-BLINK_STATES = {"question"}
+# States that blink rather than show a solid color. "question" reads as
+# distinct from "waiting" at a glance despite the two sharing a similarly
+# warm color. "tool_stalled" is the same purple as "tool_running" — a
+# tool call that's been pending past STALL_THRESHOLD_SECONDS — blinking
+# is the only thing distinguishing "still running" from "taking a while".
+BLINK_STATES = {"question", "tool_stalled"}
 BLINK_PERIOD = 0.5  # seconds per on/off phase
 
 # Per-slot state, kept so we can redraw the OLED without re-parsing
@@ -95,7 +105,7 @@ def pixel_color(state, blink_on):
     "on" looks like without duplicating the logic."""
     if state in BLINK_STATES and not blink_on:
         return STATE_COLORS["off"]
-    return STATE_COLORS.get(state, STATE_COLORS["off"])
+    return STATE_COLORS.get(state, STATE_COLORS["unknown"])
 
 
 # --- Line-buffered read from usb_cdc.data -----------------------------

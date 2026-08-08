@@ -52,10 +52,21 @@ def test_handle_message_ping_replies_with_hello(pad):
 def test_pixel_color_blinks_off_phase_for_blink_states(pad):
     assert pad.pixel_color("question", blink_on=True) == pad.STATE_COLORS["question"]
     assert pad.pixel_color("question", blink_on=False) == pad.STATE_COLORS["off"]
+    assert pad.pixel_color("tool_stalled", blink_on=True) == pad.STATE_COLORS["tool_stalled"]
+    assert pad.pixel_color("tool_stalled", blink_on=False) == pad.STATE_COLORS["off"]
 
 
 def test_pixel_color_non_blink_state_ignores_blink_phase(pad):
     assert pad.pixel_color("working", blink_on=False) == pad.STATE_COLORS["working"]
+    assert pad.pixel_color("tool_running", blink_on=False) == pad.STATE_COLORS["tool_running"]
+
+
+def test_pixel_color_unrecognized_state_falls_back_to_unknown(pad):
+    # Simulates a newer daemon.py sending a state this firmware build
+    # predates — should read as visually distinct "unknown", not fall
+    # back to "off" (which would look like the slot was just cleared).
+    assert pad.pixel_color("some-future-state", blink_on=True) == pad.STATE_COLORS["unknown"]
+    assert pad.STATE_COLORS["unknown"] != pad.STATE_COLORS["off"]
 
 
 def test_redraw_truncates_to_character_budget(pad):

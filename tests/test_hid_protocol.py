@@ -24,11 +24,26 @@ def test_pack_slot_encodes_index_and_state():
 
 
 def test_pack_slot_covers_every_hook_to_state_output():
-    # hook_to_state (daemon.py) only ever returns these six strings (or
-    # None, which never reaches write_json) — every one must round-trip.
-    for state in ("idle", "working", "waiting", "done", "error", "question"):
+    # hook_to_state (daemon.py) and watch_stalled_calls only ever produce
+    # these eight strings (or None, which never reaches write_json) —
+    # every one must round-trip.
+    for state in (
+        "idle", "working", "waiting", "done", "error", "question",
+        "tool_running", "tool_stalled",
+    ):
         report = hid_protocol.pack_slot(0, state)
         assert hid_protocol.CODE_TO_STATE[report[2]] == state
+
+
+def test_state_off_is_pinned_with_headroom_for_future_states():
+    # STATE_OFF is deliberately parked well above the states defined
+    # today, rather than "whatever's defined last" — so a new state can
+    # be added without ever renumbering STATE_OFF (and everything
+    # anchored to its value on the QMK side) again. If this ever fails,
+    # either headroom ran out (bump STATE_OFF further) or STATE_OFF got
+    # accidentally renumbered down near the real states.
+    assert hid_protocol.STATE_OFF == 31
+    assert hid_protocol.STATE_OFF - hid_protocol.STATE_TOOL_STALLED > 10
 
 
 def test_pack_slot_off_is_distinct_from_idle():
