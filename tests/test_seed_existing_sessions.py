@@ -116,10 +116,15 @@ def test_seed_existing_sessions_allocates_slots_and_sends_idle(recording_daemon,
     assert d.slots.slot_for("sa") == 0
     assert d.slots.slot_for("sb") == 1
     assert d.session_projects == {"sa": "proj-a", "sb": "proj-b"}
-    assert sent == [
+    # The two real sessions get idle; every other slot this daemon
+    # process didn't just claim gets explicitly cleared to off, so a
+    # slot left glowing by a dead session/previous daemon run doesn't
+    # linger forever.
+    assert sent[:2] == [
         {"t": "slot", "i": 0, "state": "idle", "label": "proj-a"},
         {"t": "slot", "i": 1, "state": "idle", "label": "proj-b"},
     ]
+    assert sent[2:] == [{"t": "clear", "i": i} for i in range(2, d.slots.num_slots)]
 
 
 def test_seed_existing_sessions_backfills_tty_and_tmux_pane(recording_daemon, monkeypatch):
@@ -166,7 +171,9 @@ def test_seed_existing_sessions_skips_entries_without_session_id(recording_daemo
         lambda: [{"pid": 1, "cwd": "/x/proj"}],
     )
     d.seed_existing_sessions()
-    assert sent == []
+    # No real session got allocated, so every slot is "other" — all of
+    # them get cleared to off.
+    assert sent == [{"t": "clear", "i": i} for i in range(d.slots.num_slots)]
 
 
 def test_seed_existing_sessions_stops_at_slot_capacity(recording_daemon, monkeypatch):
@@ -186,6 +193,32 @@ def test_seed_existing_sessions_stops_at_slot_capacity(recording_daemon, monkeyp
     assert d.slots.slot_for("sa") == 0
     assert d.slots.slot_for("sb") is None
     assert len(sent) == 1
+
+
+def test_seed_existing_sessions_clears_unclaimed_slots_only(recording_daemon, monkeypatch):
+    """A slot with no matching entry in `claude agents --json` gets an
+    explicit "off" (clear) — covers a session that died without ever
+    sending SessionEnd (crash, kill -9, a previous daemon run that never
+    shut down cleanly), which would otherwise leave that slot showing
+    whatever it last displayed forever, since nothing else ever
+    revisits an unallocated slot.
+    """
+    d, sent = recording_daemon
+    d.slots = daemon.SlotManager(4)
+    monkeypatch.setattr(
+        daemon, "discover_running_sessions",
+        lambda: [{"pid": 1, "cwd": "/x/proj", "sessionId": "s1", "kind": "interactive"}],
+    )
+    monkeypatch.setattr(daemon, "_controlling_tty", lambda pid: None)
+
+    d.seed_existing_sessions()
+
+    assert sent == [
+        {"t": "slot", "i": 0, "state": "idle", "label": "proj"},
+        {"t": "clear", "i": 1},
+        {"t": "clear", "i": 2},
+        {"t": "clear", "i": 3},
+    ]
 
 
 def test_seeded_session_pane_backfilled_by_later_hook_event(recording_daemon, monkeypatch):

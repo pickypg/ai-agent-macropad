@@ -369,8 +369,14 @@ per session it reports, so the pad shows them immediately instead of
 waiting for each one to happen to fire a hook event first. Requires an
 up-to-date `claude` on `PATH`; an older CLI (or none at all) just
 means seeding finds nothing, and pre-existing sessions fall back to
-picking up a slot lazily on their first hook event instead (see
-`Daemon.seed_existing_sessions()` in `daemon.py`).
+picking up a slot lazily on their first hook event instead. Every
+*other* slot — anything not claimed by a real session in that
+`claude agents --json` output — gets explicitly cleared to off, so a
+slot left glowing by a session that died without a clean `SessionEnd`
+(a crash, `kill -9`, or a previous daemon run that never shut down
+properly) doesn't linger forever; the pad has no way to know the old
+daemon process is gone, so nothing else would ever revisit that slot
+otherwise (see `Daemon.seed_existing_sessions()` in `daemon.py`).
 
 ### 3. Try it without real hooks
 

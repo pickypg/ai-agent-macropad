@@ -1575,6 +1575,14 @@ class Daemon:
         daemon has no way to know if a pre-existing session is mid-tool-
         call or waiting on you, and the next real hook event corrects it
         momentarily either way.
+
+        Every other slot — anything this loop doesn't allocate to a real
+        session — gets explicitly cleared to "off". The pad has no idea
+        the old daemon process is gone; without this, a slot left mid-
+        color by a now-dead session (or a previous daemon run, e.g. a
+        crash or a manual test that never sent SessionEnd) just sits
+        there showing stale state forever, since nothing else ever
+        revisits an unallocated slot.
         """
         sessions = discover_running_sessions()
         for s in sessions:
@@ -1607,6 +1615,14 @@ class Daemon:
                 "seeded %d pre-existing session(s) from `claude agents --json`",
                 len(sessions),
             )
+
+        cleared = 0
+        for i in range(self.slots.num_slots):
+            if self.slots.slot_to_session[i] is None:
+                self._send_pad({"t": "clear", "i": i})
+                cleared += 1
+        if cleared:
+            log.info("cleared %d unclaimed slot(s) to off at startup", cleared)
 
     def apply_handshake(self, handshake):
         """Size self.slots from a pad's handshake() result (Phase 3),
