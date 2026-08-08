@@ -274,6 +274,17 @@ just logs what it _would_ send instead of writing to a port. This lets
 you develop against the socket/slot-mapping logic without any
 hardware plugged in.
 
+Before it starts accepting hook events, the daemon also seeds slots
+for any Claude Code sessions that were *already* running — e.g. a
+daemon restart while sessions are mid-conversation — by shelling out
+to `claude agents --json` (Claude Code ≥2.1.224) and allocating a slot
+per session it reports, so the pad shows them immediately instead of
+waiting for each one to happen to fire a hook event first. Requires an
+up-to-date `claude` on `PATH`; an older CLI (or none at all) just
+means seeding finds nothing, and pre-existing sessions fall back to
+picking up a slot lazily on their first hook event instead (see
+`Daemon.seed_existing_sessions()` in `daemon.py`).
+
 ### 3. Try it without real hooks
 
 To exercise the daemon before wiring up real hooks (or anytime you don't
@@ -368,6 +379,11 @@ module stands in for it):
   transports, `AutoPadLink`'s delegation, `Daemon.apply_handshake()`)
   is tested in `tests/test_pad_handshake.py`, including the
   timeout/no-reply/headless cases.
+- Startup seeding of pre-existing sessions (`discover_running_sessions()`,
+  `Daemon.seed_existing_sessions()`, and the tty/tmux-pane backfill
+  helpers) is tested in `tests/test_seed_existing_sessions.py`, with
+  `subprocess.run` swapped for a recording fake the same way as the
+  other discovery tests.
 - `rp2040/code.py`'s protocol/state logic (`read_json_lines`,
   `handle_message`, `redraw`, `pixel_color`) is tested by importing the
   file with its CircuitPython-only imports (`usb_cdc`, `displayio`,
@@ -418,6 +434,11 @@ MacroPad RP2040, matching its key count 1:1; whatever a QMK-based pad
 reports otherwise — see `Daemon.apply_handshake()` in `daemon.py`), with
 `NUM_SLOTS` (12) used as a fallback if the pad is headless or doesn't
 answer the handshake in time.
+
+Sessions already running when the daemon starts are seeded into slots
+up front via `claude agents --json`, rather than waiting for their next
+hook event — see `Daemon.seed_existing_sessions()` in `daemon.py` and
+[Run the daemon](#2-run-the-daemon) above.
 
 ### Pad messages (daemon ↔ device)
 
@@ -497,6 +518,7 @@ pad now works end to end:
 - ✅ HID protocol to/from QMK keyboards (e.g. NuPhy Air75 V2), same auto-discovery
 - ✅ Slot allocation for concurrent sessions
 - ✅ Key-press → bring-window-to-front dispatch (macOS)
+- ✅ Startup seeding of already-running sessions (`claude agents --json`)
 
 ## License
 

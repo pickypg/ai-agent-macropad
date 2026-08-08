@@ -39,6 +39,15 @@ Requires: pip install pyserial. HID transport additionally requires
 pip install hid, plus the native hidapi library (e.g. brew install
 hidapi on macOS) — optional: daemon.py runs fine without either
 installed, it just can't attach over HID.
+
+At startup, before the socket starts accepting hook events, the
+daemon also seeds slots for any Claude Code sessions that were
+already running (e.g. a daemon restart mid-session) via `claude
+agents --json` — see discover_running_sessions() and
+Daemon.seed_existing_sessions() below. Requires Claude Code >=2.1.224;
+an older CLI (or no `claude` on PATH) just means seeding finds nothing
+and pre-existing sessions fall back to the pre-existing
+lazy-allocation-on-first-hook-event behavior instead.
 """
 import asyncio
 import json
@@ -792,6 +801,92 @@ def make_pad_link(on_device_event, on_reattach=None):
     return AutoPadLink(on_device_event, on_reattach)
 
 
+# --- Existing session discovery -----------------------------------------
+#
+# A restarted daemon (or one started after Claude Code sessions are
+# already open) otherwise has no slots until each pre-existing session
+# happens to fire some hook event — see the lazy-allocation fallback
+# in handle_hook_event, added for exactly this case. `claude agents
+# --json` (Claude Code >=2.1.224) prints every currently-active
+# session — interactive and background — as a JSON array with at
+# least pid/cwd/sessionId, letting the daemon seed slots for all of
+# them at startup instead of waiting. Best-effort: an older CLI, no
+# `claude` on PATH, or any parse failure just means an empty list,
+# same headless-friendly posture as pad discovery elsewhere in this
+# file.
+
+def discover_running_sessions():
+    try:
+        result = subprocess.run(
+            ["claude", "agents", "--json"],
+            capture_output=True, timeout=5, text=True,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log.info("could not query running Claude Code sessions: %s", e)
+        return []
+    if result.returncode != 0:
+        log.info(
+            "`claude agents --json` exited %d: %s",
+            result.returncode, result.stderr.strip(),
+        )
+        return []
+    try:
+        sessions = json.loads(result.stdout)
+    except ValueError:
+        log.warning(
+            "bad JSON from `claude agents --json`: %r", result.stdout[:200]
+        )
+        return []
+    if not isinstance(sessions, list):
+        log.warning("unexpected `claude agents --json` output shape: %r", sessions)
+        return []
+    return sessions
+
+
+def _controlling_tty(pid):
+    """Best-effort equivalent of hook.sh's SessionStart tty lookup (see
+    its docstring), run directly against a session's own pid instead of
+    a hook subprocess's parent — there's no hook invocation to piggyback
+    on for a session the daemon didn't see start. Returns None for a
+    dead pid or one with no controlling terminal (e.g. VS Code's
+    integrated terminal, same as hook.sh's "??" case).
+    """
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "tty=", "-p", str(pid)],
+            capture_output=True, timeout=2, text=True,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    tty = result.stdout.strip()
+    if not tty or tty == "??":
+        return None
+    return f"/dev/{tty}"
+
+
+def _tmux_pane_for_tty(tty):
+    """Cross-references a controlling tty against every tmux pane on the
+    machine to recover the pane id hook.sh would otherwise report via
+    $TMUX_PANE — only meaningful when _controlling_tty() above actually
+    found one. Best-effort: no tmux on PATH, or no server running, just
+    means no match.
+    """
+    try:
+        result = subprocess.run(
+            ["tmux", "list-panes", "-a", "-F", "#{pane_tty} #{pane_id}"],
+            capture_output=True, timeout=2, text=True,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        pane_tty, _, pane_id = line.partition(" ")
+        if pane_tty == tty:
+            return pane_id
+    return None
+
+
 # --- Daemon: socket server + hook->state logic -------------------------
 
 # Notification:permission_prompt is known to be unreliable — it can
@@ -1315,11 +1410,20 @@ class Daemon:
             if i is None:
                 events_log.info("DROPPED reason=no_free_slot")
                 return
+            label = Path(payload.get("cwd", "")).name or session_id[:8]
+            self.session_projects[session_id] = label
+
+        # Backfill tmux_pane from whichever hook event happens to be the
+        # first one this daemon process sees for the session, even if a
+        # slot was already allocated above — seed_existing_sessions()
+        # can allocate a slot for a session at startup without ever
+        # learning its pane (claude agents --json has no tmux info), so
+        # this can't be folded into the "i is None" branch above without
+        # leaving those sessions permanently pane-less.
+        if session_id not in self.session_panes:
             pane = payload.get("tmux_pane")
             if pane:
                 self.session_panes[session_id] = pane
-            label = Path(payload.get("cwd", "")).name or session_id[:8]
-            self.session_projects[session_id] = label
 
         state = hook_to_state(
             event_name, payload.get("tool_name"), payload.get("notification_type")
@@ -1430,6 +1534,52 @@ class Daemon:
         finally:
             writer.close()
 
+    def seed_existing_sessions(self):
+        """Pre-populate slots from `claude agents --json` (see
+        discover_running_sessions() above) so sessions already running
+        when this daemon starts show up on the pad immediately, instead
+        of staying blank until they happen to fire a hook event. Called
+        once from serve(), before the socket starts accepting hook
+        events, so there's no race with handle_hook_event's own
+        slot_for()/allocate() calls.
+
+        Seeds state="idle" unconditionally rather than guessing — the
+        daemon has no way to know if a pre-existing session is mid-tool-
+        call or waiting on you, and the next real hook event corrects it
+        momentarily either way.
+        """
+        sessions = discover_running_sessions()
+        for s in sessions:
+            session_id = s.get("sessionId")
+            if not session_id:
+                continue
+            i = self.slots.allocate(session_id)
+            if i is None:
+                continue
+            label = Path(s.get("cwd", "")).name or session_id[:8]
+            self.session_projects[session_id] = label
+
+            tty = None
+            pid = s.get("pid")
+            if pid:
+                tty = _controlling_tty(pid)
+            if tty:
+                self.session_ttys[session_id] = tty
+                pane = _tmux_pane_for_tty(tty)
+                if pane:
+                    self.session_panes[session_id] = pane
+
+            self._send_pad({"t": "slot", "i": i, "state": "idle", "label": label})
+            events_log.info(
+                "MAPPED slot=%s state=idle pane=%s tty=%s project=%s (seeded at startup)",
+                i, self.session_panes.get(session_id, "<none>"), tty or "<none>", label,
+            )
+        if sessions:
+            log.info(
+                "seeded %d pre-existing session(s) from `claude agents --json`",
+                len(sessions),
+            )
+
     def apply_handshake(self, handshake):
         """Size self.slots from a pad's handshake() result (Phase 3),
         so "if it supports 1, fine; if it supports 100, great" — the
@@ -1467,6 +1617,11 @@ class Daemon:
         # can arrive and get mapped under the old (possibly wrong)
         # sizing.
         self.apply_handshake(self.pad.handshake())
+        # Also before start_unix_server: seeds slots from sessions
+        # already running, so there's no race with a hook event for one
+        # of them arriving and hitting handle_hook_event's own
+        # allocate() first.
+        self.seed_existing_sessions()
 
         server = await asyncio.start_unix_server(
             self.handle_connection, path=str(sock_path), limit=SOCKET_READ_LIMIT
