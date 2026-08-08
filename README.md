@@ -285,9 +285,9 @@ cd ../keychron-qmk-firmware && git submodule update --init --recursive
 brew install qmk/qmk/qmk    # plus an ARM cross-compiler for this board's STM32L432
 qmk config user.qmk_home=../keychron-qmk-firmware
 
-git apply --directory=keyboards/keychron/k1_pro ../claude-macropad/qmk-userspace/keyboards/keychron/k1_pro/k1_pro.c.patch
-# (--directory prefixes the patch's relative path; drop it and cd into
-# ../keychron-qmk-firmware first if your git version doesn't support it)
+git apply ../claude-macropad/qmk-userspace/keyboards/keychron/k1_pro/k1_pro.c.patch
+# (already cd'd into ../keychron-qmk-firmware above — the patch's paths
+# are relative to that repo's root, so no --directory needed here)
 
 cd ../claude-macropad/qmk-userspace
 QMK_USERSPACE="$(pwd)" qmk compile -kb keychron/k1_pro/ansi/rgb -km claude_macropad
