@@ -196,7 +196,7 @@ def hook_to_state(event_name, tool_name=None, notification_type=None):
     return {
         "SessionStart": "idle",
         "UserPromptSubmit": "working",
-        "PreToolUse": "working",
+        "PreToolUse": "tool_running",
         "PostToolUse": "working",
         "PostToolUseFailure": "error",
         "Stop": "done",
@@ -1433,7 +1433,7 @@ class Daemon:
         # event changes the displayed state. See STALL_THRESHOLD_SECONDS
         # for why this exists: Notification:permission_prompt can't be
         # trusted to fire on its own.
-        if event_name == "PreToolUse" and state == "working":
+        if event_name == "PreToolUse" and state == "tool_running":
             self.pending_calls[session_id] = {
                 "slot": i,
                 "tool_name": payload.get("tool_name"),
@@ -1462,15 +1462,20 @@ class Daemon:
         events_log.info("MAPPED slot=%s state=%s event=%s", i, state, event_name)
 
     async def watch_stalled_calls(self):
-        """Backstop for Notification:permission_prompt's unreliability.
+        """Backstop for Notification:permission_prompt's unreliability —
+        and for tool calls that are just taking a while.
 
         Polls pending_calls once a second; anything sitting past
         STALL_THRESHOLD_SECONDS without a PostToolUse/PostToolUseFailure
-        gets escalated to "question" exactly once. No further action
-        needed on the daemon's part after that — the normal PostToolUse
-        handling in handle_hook_event already downgrades back to
-        "working"/"done" whenever the tool call actually finishes,
-        whether or not it was escalated first.
+        gets escalated to "tool_stalled" (blinking purple) exactly once.
+        This deliberately does NOT claim "question" (blocked, needs your
+        input) — we don't actually know whether this is an unreported
+        permission prompt or just a slow tool, so "still purple, just
+        been a while" is the honest signal. No further action needed on
+        the daemon's part after that — the normal PostToolUse handling
+        in handle_hook_event already downgrades back to "working"/"done"
+        whenever the tool call actually finishes, whether or not it was
+        escalated first.
         """
         if STALL_THRESHOLD_SECONDS is None:
             return
@@ -1483,13 +1488,13 @@ class Daemon:
                 if now - pending["since"] < STALL_THRESHOLD_SECONDS:
                     continue
                 pending["escalated"] = True
-                self._send_pad({"t": "slot", "i": pending["slot"], "state": "question"})
+                self._send_pad({"t": "slot", "i": pending["slot"], "state": "tool_stalled"})
                 events_log.info(
-                    "MAPPED slot=%s state=question event=stall_detected tool=%s elapsed=%.1fs",
+                    "MAPPED slot=%s state=tool_stalled event=stall_detected tool=%s elapsed=%.1fs",
                     pending["slot"], pending["tool_name"], now - pending["since"],
                 )
                 log.info(
-                    "stall detected: session=%s tool=%s elapsed=%.1fs — escalating to question",
+                    "stall detected: session=%s tool=%s elapsed=%.1fs — escalating to tool_stalled",
                     session_id, pending["tool_name"], now - pending["since"],
                 )
 

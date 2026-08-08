@@ -27,18 +27,29 @@ QMK keymap C for Air75-style boards) that runs on the pad itself.
 Each slot's NeoPixel color reflects that session's current state, per
 `STATE_COLORS` in [`rp2040/code.py`](rp2040/code.py):
 
-|     | Label       | Color                      | Internal state | When                                                                                                          |
-| --- | ----------- | -------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------- |
-| ⚪  | idle        | dim gray `#282828`         | `idle`         | `SessionStart` — slot allocated, nothing happening yet                                                        |
-| 🔵  | thinking    | blue `#0000FF`             | `working`      | A prompt was submitted or a tool is running (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`)                 |
-| 🟢  | complete    | green `#00FF00`            | `done`         | `Stop` — Claude finished responding                                                                           |
-| 🟠  | needs input | orange `#FF7F00`, blinking | `question`     | Blocked on you: `AskUserQuestion`, `ExitPlanMode`, `PermissionRequest`, or `Notification:agent_needs_input`   |
-| 🟡  | waiting     | amber `#FFAA00`            | `waiting`      | Claude's been idle 60s+ with nothing blocking (`Notification:idle_prompt`) — lower urgency than "needs input" |
-| 🔴  | error       | red `#FF0000`              | `error`        | `PostToolUseFailure`                                                                                          |
+|     | Label        | Color                      | Internal state | When                                                                                                           |
+| --- | ------------ | --------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------- |
+| ⚪  | idle         | dim gray `#282828`         | `idle`         | `SessionStart` — slot allocated, nothing happening yet                                                        |
+| 🔵  | thinking     | blue `#0000FF`              | `working`      | Claude is reasoning between tool calls (`UserPromptSubmit`, `PostToolUse`)                                    |
+| 🟣  | tool running | purple `#8000FF`            | `tool_running` | A tool call is actively executing (`PreToolUse`)                                                              |
+| 🟢  | complete     | green `#00FF00`            | `done`         | `Stop` — Claude finished responding                                                                           |
+| 🟠  | needs input  | orange `#FF7F00`, blinking | `question`     | Blocked on you: `AskUserQuestion`, `ExitPlanMode`, `PermissionRequest`, or `Notification:agent_needs_input`   |
+| 🟣  | tool stalled | purple `#8000FF`, blinking | `tool_stalled` | A tool call has been pending past `STALL_THRESHOLD_SECONDS` with no `PostToolUse` — may or may not be blocked |
+| 🟡  | waiting      | amber `#FFAA00`             | `waiting`      | Claude's been idle 60s+ with nothing blocking (`Notification:idle_prompt`) — lower urgency than "needs input" |
+| 🔴  | error        | red `#FF0000`              | `error`        | `PostToolUseFailure`                                                                                           |
 
-"needs input" blinks (0.5s on/off, `BLINK_PERIOD` in `rp2040/code.py`)
-so it reads as distinct from "waiting" at a glance despite the two
-sharing a similarly warm color.
+"needs input" and "tool stalled" blink (0.5s on/off, `BLINK_PERIOD` in
+`rp2040/code.py`) so each reads as distinct from its solid-color
+sibling at a glance — "needs input" from "waiting" despite sharing a
+similarly warm color, and "tool stalled" from "tool running" despite
+sharing the same purple hue.
+
+A slot that receives a state it doesn't recognize — e.g. an older
+firmware/`rp2040/code.py` build talking to a newer daemon that's added a
+state since it was last flashed — renders solid magenta `#FF00FF`
+instead of silently falling back to idle or off, which would look like
+nothing's wrong. This is a fallback rendering behavior, not a state
+`hook_to_state` ever produces on purpose.
 
 **Only tested on macOS.** Window-dispatch (tmux/Terminal.app/VS
 Code/IntelliJ activation) uses AppleScript and is macOS-only outright;
@@ -412,21 +423,26 @@ of a Claude Code hook payload. Recognized fields:
 
 `hook_event_name` maps to a display state roughly as:
 
-| Event                                                                      | State        |
-| -------------------------------------------------------------------------- | ------------ |
-| `SessionStart`                                                             | `idle`       |
-| `UserPromptSubmit`, `PreToolUse`, `PostToolUse`                            | `working`    |
-| `PreToolUse` with `AskUserQuestion`/`ExitPlanMode`, or `PermissionRequest` | `question`   |
-| `PostToolUseFailure`                                                       | `error`      |
-| `Stop`                                                                     | `done`       |
-| `Notification` (`agent_needs_input`)                                       | `question`   |
-| `Notification` (`idle_prompt`)                                             | `waiting`    |
-| `SessionEnd`                                                               | slot cleared |
+| Event                                                                      | State          |
+| -------------------------------------------------------------------------- | -------------- |
+| `SessionStart`                                                             | `idle`         |
+| `UserPromptSubmit`, `PostToolUse`                                          | `working`      |
+| `PreToolUse` (generic tool)                                                | `tool_running` |
+| `PreToolUse` with `AskUserQuestion`/`ExitPlanMode`, or `PermissionRequest` | `question`     |
+| `PostToolUseFailure`                                                       | `error`        |
+| `Stop`                                                                     | `done`         |
+| `Notification` (`agent_needs_input`)                                       | `question`     |
+| `Notification` (`idle_prompt`)                                             | `waiting`      |
+| `SessionEnd`                                                               | slot cleared   |
 
 A `PreToolUse` with no matching `PostToolUse`/`PostToolUseFailure` within
-`STALL_THRESHOLD_SECONDS` (default 10s) is escalated to `question` as a
-backstop, since `Notification:permission_prompt` isn't reliable enough
-to depend on alone.
+`STALL_THRESHOLD_SECONDS` (default 10s) is escalated to `tool_stalled`
+(blinking purple) as a backstop, since `Notification:permission_prompt`
+isn't reliable enough to depend on alone. This deliberately stops short
+of claiming `question` (definitely blocked on you) — the daemon can't
+actually tell whether a stalled tool call is an unreported permission
+prompt or just a slow tool, so `tool_stalled` only claims "this is
+taking a while."
 
 Slots are allocated first-fit and freed on `SessionEnd`. The number of
 slots comes from the pad's own `hello` handshake at startup (12 for the
@@ -483,16 +499,24 @@ exact byte layout:
 | ------------- | --------------- | ---------------------------------- |
 | `MSG_PING`    | daemon → device | (none)                             |
 | `MSG_HELLO`   | device → daemon | device id, `slots`                 |
-| `MSG_SLOT`    | daemon → device | slot index, state (0-6, see below) |
+| `MSG_SLOT`    | daemon → device | slot index, state (0-31, see below) |
 | `MSG_KEY`     | device → daemon | slot index                         |
 
 State bytes mirror `STATE_COLORS`'s keys in `rp2040/code.py` 1:1
-(`idle`=0, `working`=1, `waiting`=2, `done`=3, `error`=4,
-`question`=5, `off`=6), so `hook_to_state`'s output maps identically
-regardless of which transport is attached. There's no separate
-"clear" report — an RGB-only pad has no label to clear, so a cleared
-slot is just `MSG_SLOT` with state `off` (fully dark — distinct from
-`idle`'s dim glow, matching `rp2040/code.py`'s own `handle_message()`).
+(`idle`=0, `working`=1, `waiting`=2, `done`=3, `error`=4, `question`=5,
+`tool_running`=6, `tool_stalled`=7, ..., `off`=31), so `hook_to_state`'s
+output maps identically regardless of which transport is attached.
+`off`=31 is deliberately pinned well above the states defined today
+rather than "whatever's defined last" — adding a future state only
+means picking the next unused number below it, never renumbering `off`
+(and the QMK side's `state <= STATE_OFF` bounds check, which is anchored
+to its value) again. Values in between that are reserved-but-unused
+today, or a value newer than what a given firmware build understands,
+render as the "unknown" fallback color described above. There's no
+separate "clear" report — an RGB-only pad has no label to clear, so a
+cleared slot is just `MSG_SLOT` with state `off` (fully dark — distinct
+from `idle`'s dim glow, matching `rp2040/code.py`'s own
+`handle_message()`).
 
 Key-press dispatch works the same as the serial protocol's
 `{"t": "key", "i": N}` — sent on key-down only, no key-up equivalent,

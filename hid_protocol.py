@@ -74,7 +74,20 @@ STATE_WAITING = 2
 STATE_DONE = 3
 STATE_ERROR = 4
 STATE_QUESTION = 5
-STATE_OFF = 6
+STATE_TOOL_RUNNING = 6
+STATE_TOOL_STALLED = 7
+
+# Deliberately pinned far above the currently-defined states above,
+# rather than "however many states currently exist" — so adding a new
+# state in the future only ever means inserting another STATE_* constant
+# before this one, never renumbering STATE_OFF itself (and everything
+# that's anchored to its value: claude_macropad.c's raw_hid_receive
+# bounds check, and its enum mirror in claude_macropad.h). Byte values
+# between the last defined state and STATE_OFF are reserved headroom —
+# a device that receives one it doesn't recognize (e.g. an older
+# firmware build talking to a newer daemon) renders it as a distinct
+# "unknown" fallback color rather than silently reusing idle's.
+STATE_OFF = 31
 
 STATE_TO_CODE = {
     "idle": STATE_IDLE,
@@ -83,6 +96,8 @@ STATE_TO_CODE = {
     "done": STATE_DONE,
     "error": STATE_ERROR,
     "question": STATE_QUESTION,
+    "tool_running": STATE_TOOL_RUNNING,
+    "tool_stalled": STATE_TOOL_STALLED,
     "off": STATE_OFF,
 }
 CODE_TO_STATE = {v: k for k, v in STATE_TO_CODE.items()}

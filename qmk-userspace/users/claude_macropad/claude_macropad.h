@@ -42,13 +42,24 @@ enum claude_macropad_msg {
     MSG_KEY   = 0x22,
 };
 
-// Pad states — must match hid_protocol.py's STATE_*/rp2040/code.py's
-// STATE_COLORS keys, 1:1 and in the same order. STATE_OFF (cleared,
-// no session mapped) is intentionally distinct from STATE_IDLE (a
-// session is mapped here but quiet) — rp2040/code.py's
-// handle_message() renders them as different colors (fully dark vs.
-// a dim glow), not just different labels, so this side needs to
-// preserve that distinction too.
+// Pad states — must match hid_protocol.py's STATE_* values 1:1 (same
+// names, same numbers — order alone isn't enough once STATE_OFF is
+// pinned below). STATE_OFF (cleared, no session mapped) is intentionally
+// distinct from STATE_IDLE (a session is mapped here but quiet) —
+// rp2040/code.py's handle_message() renders them as different colors
+// (fully dark vs. a dim glow), not just different labels, so this side
+// needs to preserve that distinction too.
+//
+// STATE_OFF is pinned at a fixed high value, deliberately far above the
+// states actually defined today, instead of "whatever's defined last" —
+// so a future state gets added by inserting another member before
+// STATE_OFF, without ever renumbering STATE_OFF (or the raw_hid_receive
+// bounds check below, which is anchored to it) again. The unused values
+// in between are reserved headroom: a byte in that range that reaches
+// state_to_rgb() without matching a known case (e.g. this firmware
+// build predates a state the daemon has since added) falls through to
+// state_to_rgb()'s "unknown" fallback color instead of silently
+// reusing STATE_IDLE's.
 enum claude_macropad_state {
     STATE_IDLE = 0,
     STATE_WORKING,
@@ -56,7 +67,9 @@ enum claude_macropad_state {
     STATE_DONE,
     STATE_ERROR,
     STATE_QUESTION,
-    STATE_OFF,
+    STATE_TOOL_RUNNING,
+    STATE_TOOL_STALLED,
+    STATE_OFF = 31,
 };
 
 // Resets all `num_slots` slots to STATE_OFF, and seeds their LED

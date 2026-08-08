@@ -26,7 +26,7 @@ def test_pretooluse_labels_slot_with_tool_name(recording_daemon):
     d.handle_hook_event(
         {"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Read"}
     )
-    assert sent[-1] == {"t": "slot", "i": 0, "state": "working", "label": "Read"}
+    assert sent[-1] == {"t": "slot", "i": 0, "state": "tool_running", "label": "Read"}
 
 
 def test_pretooluse_ask_user_question_maps_to_question(recording_daemon):
@@ -83,7 +83,7 @@ def test_event_before_session_start_lazily_allocates(recording_daemon):
 
     assert d.slots.slot_for("s1") == 0
     assert d.session_projects["s1"] == "proj"
-    assert sent[-1] == {"t": "slot", "i": 0, "state": "working", "label": "Bash"}
+    assert sent[-1] == {"t": "slot", "i": 0, "state": "tool_running", "label": "Bash"}
 
 
 def test_event_dropped_when_no_free_slot_for_new_session(recording_daemon):
@@ -107,7 +107,7 @@ def test_pretooluse_then_posttoolure_clears_pending_call(recording_daemon):
     assert "s1" not in d.pending_calls
 
 
-def test_stalled_call_escalates_to_question(recording_daemon, monkeypatch):
+def test_stalled_call_escalates_to_tool_stalled(recording_daemon, monkeypatch):
     d, sent = recording_daemon
     d.handle_hook_event({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": "/p"})
     d.handle_hook_event({"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash"})
@@ -125,7 +125,7 @@ def test_stalled_call_escalates_to_question(recording_daemon, monkeypatch):
 
     asyncio.run(run_briefly())
 
-    assert sent[-1] == {"t": "slot", "i": 0, "state": "question"}
+    assert sent[-1] == {"t": "slot", "i": 0, "state": "tool_stalled"}
     assert d.pending_calls["s1"]["escalated"] is True
 
 
