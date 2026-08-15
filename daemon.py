@@ -1465,6 +1465,20 @@ class Daemon:
             }
         elif event_name in ("PostToolUse", "PostToolUseFailure"):
             self.pending_calls.pop(session_id, None)
+        elif state == "question":
+            # A definite blocked-on-you signal (PermissionRequest,
+            # Notification:agent_needs_input, ...) arrived for a tool
+            # call already being tracked as pending — e.g. PreToolUse
+            # for Bash, followed by PermissionRequest for that same
+            # command. Drop it from pending_calls so watch_stalled_calls
+            # doesn't later clobber this "question" with "tool_stalled":
+            # that would replace a state we're already certain about
+            # (blocked on you) with a guess (maybe blocked, maybe just
+            # slow) once STALL_THRESHOLD_SECONDS elapses from the
+            # original PreToolUse. PostToolUse still arrives once the
+            # call actually resolves either way, so nothing here is
+            # left permanently untracked.
+            self.pending_calls.pop(session_id, None)
 
         if state is None:
             # This is the exact case that made the jq bug invisible

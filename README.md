@@ -524,7 +524,12 @@ isn't reliable enough to depend on alone. This deliberately stops short
 of claiming `question` (definitely blocked on you) — the daemon can't
 actually tell whether a stalled tool call is an unreported permission
 prompt or just a slow tool, so `tool_stalled` only claims "this is
-taking a while."
+taking a while." If a definite `question` signal (`PermissionRequest`,
+`Notification:agent_needs_input`) does arrive for that same pending
+call, the stall tracking for it is dropped — the slot's already showing
+a stronger, more specific state than a guess, and shouldn't get
+clobbered back to `tool_stalled` once the threshold elapses from the
+original `PreToolUse`.
 
 Slots are allocated first-fit and freed on `SessionEnd`. The number of
 slots comes from the pad's own `hello` handshake at startup (12 for the

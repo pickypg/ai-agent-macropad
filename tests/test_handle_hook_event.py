@@ -107,6 +107,50 @@ def test_pretooluse_then_posttoolure_clears_pending_call(recording_daemon):
     assert "s1" not in d.pending_calls
 
 
+def test_permission_request_after_pretooluse_clears_pending_call(recording_daemon):
+    """A tool call that turns into a permission prompt (e.g. Bash asking
+    "Allow this command?") is a definite blocked-on-you signal, already
+    shown as "question" — it should stop being tracked as a pending
+    tool call, not sit around waiting to be second-guessed later by the
+    stall watcher.
+    """
+    d, sent = recording_daemon
+    d.handle_hook_event({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": "/p"})
+    d.handle_hook_event({"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash"})
+    assert "s1" in d.pending_calls
+
+    d.handle_hook_event({"hook_event_name": "PermissionRequest", "session_id": "s1", "tool_name": "Bash"})
+    assert "s1" not in d.pending_calls
+    assert sent[-1] == {"t": "slot", "i": 0, "state": "question"}
+
+
+def test_permission_request_prevents_stall_escalation_to_tool_stalled(recording_daemon):
+    """Regression test: previously, a PreToolUse followed by a
+    PermissionRequest for the same call left the original pending_calls
+    entry (and its "since" timestamp) in place. Once
+    STALL_THRESHOLD_SECONDS elapsed from that original PreToolUse, the
+    stall watcher would clobber the correct blinking "question" with
+    "tool_stalled" — even though nothing was actually stuck, it was just
+    waiting on the user to approve the permission prompt.
+    """
+    d, sent = recording_daemon
+    d.handle_hook_event({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": "/p"})
+    d.handle_hook_event({"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash"})
+    d.handle_hook_event({"hook_event_name": "PermissionRequest", "session_id": "s1", "tool_name": "Bash"})
+
+    async def run_briefly():
+        task = asyncio.ensure_future(d.watch_stalled_calls())
+        await asyncio.sleep(1.1)  # watch_stalled_calls polls every 1s
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run_briefly())
+
+    assert sent[-1] == {"t": "slot", "i": 0, "state": "question"}
+    assert "s1" not in d.pending_calls
+
+
 def test_stalled_call_escalates_to_tool_stalled(recording_daemon, monkeypatch):
     d, sent = recording_daemon
     d.handle_hook_event({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": "/p"})
