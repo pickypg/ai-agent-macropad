@@ -6,17 +6,14 @@ by what that session is doing (working, waiting on you, done, errored,
 etc.) — pressing a key brings that session's window (Terminal, VS
 Code, or IntelliJ) to the front.
 
-Two pads are supported out of the box: the [Adafruit MacroPad
-RP2040](https://www.adafruit.com/product/5100) (12 keys, plus an OLED
-that shows a label per slot) over USB serial, and any RGB QMK
-keyboard — proven on a [NuPhy Air75
-V2](https://nuphy.com/products/air75-v2) — over USB HID. Porting to
-another QMK board should take little more than adding its own keymap
-(VID/PID plus per-key mapping) — the daemon, HID wire protocol, and
-dispatch logic are already keyboard-agnostic; see [QMK keyboard (NuPhy
-Air75 V2)](#qmk-keyboard-nuphy-air75-v2) for the pattern to follow.
+Any RGB QMK keyboard works over USB HID — proven on a [NuPhy Air75
+V2](https://nuphy.com/products/air75-v2). Porting to another QMK board
+should take little more than adding its own keymap (VID/PID plus
+per-key mapping) — the daemon, HID wire protocol, and dispatch logic
+are already keyboard-agnostic; see [QMK keyboard (NuPhy Air75
+V2)](#qmk-keyboard-nuphy-air75-v2) for the pattern to follow.
 
-A third QMK board, the [Keychron K1
+A second QMK board, the [Keychron K1
 Pro](https://www.keychron.com/products/keychron-k1-pro-qmk-via-wireless-custom-mechanical-keyboard)
 (ANSI), is also wired up, built against Keychron's own official
 firmware source — but **unverified on real hardware**, and needs one
@@ -26,14 +23,20 @@ before relying on it.
 
 This repo covers the full path end to end: an example Claude Code
 `settings.json` wiring plus the hook script it invokes, a host-side
-daemon that speaks a small JSON protocol with the pad over USB serial
-or USB HID, and the on-device code (CircuitPython for the MacroPad,
-QMK keymap C for Air75-style boards) that runs on the pad itself.
+daemon that speaks a small binary protocol with the pad over USB HID,
+and the QMK keymap C that runs on the pad itself.
+
+The daemon only holds the pad's HID connection open while at least one
+Claude Code session is active, releasing it shortly after the last one
+ends — see [Run the daemon](#2-run-the-daemon) — so the [VIA
+app](https://www.caniusevia.com/), which needs exclusive access to
+that same interface, can be used without manually stopping the daemon
+first.
 
 ## Pad states
 
-Each slot's NeoPixel color reflects that session's current state, per
-`STATE_COLORS` in [`rp2040/code.py`](rp2040/code.py):
+Each slot's RGB color reflects that session's current state, per
+`STATE_TO_CODE` in [`hid_protocol.py`](hid_protocol.py):
 
 |     | Label        | Color                      | Internal state | When                                                                                                           |
 | --- | ------------ | --------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -46,27 +49,22 @@ Each slot's NeoPixel color reflects that session's current state, per
 | 🟡  | waiting      | amber `#FFAA00`             | `waiting`      | Claude's been idle 60s+ with nothing blocking (`Notification:idle_prompt`) — lower urgency than "needs input" |
 | 🔴  | error        | red `#FF0000`              | `error`        | `PostToolUseFailure`                                                                                           |
 
-"needs input" and "tool stalled" blink (0.5s on/off, `BLINK_PERIOD` in
-`rp2040/code.py`) so each reads as distinct from its solid-color
-sibling at a glance — "needs input" from "waiting" despite sharing a
-similarly warm color, and "tool stalled" from "tool running" despite
-sharing the same purple hue.
+"needs input" and "tool stalled" blink (0.5s on/off) so each reads as
+distinct from its solid-color sibling at a glance — "needs input" from
+"waiting" despite sharing a similarly warm color, and "tool stalled"
+from "tool running" despite sharing the same purple hue.
 
-A slot that receives a state it doesn't recognize — e.g. an older
-firmware/`rp2040/code.py` build talking to a newer daemon that's added a
-state since it was last flashed — renders solid magenta `#FF00FF`
-instead of silently falling back to idle or off, which would look like
-nothing's wrong. This is a fallback rendering behavior, not a state
-`hook_to_state` ever produces on purpose.
+A slot that receives a state it doesn't recognize — e.g. older
+firmware talking to a newer daemon that's added a state since it was
+last flashed — renders solid magenta `#FF00FF` instead of silently
+falling back to idle or off, which would look like nothing's wrong.
+This is a fallback rendering behavior, not a state `hook_to_state`
+ever produces on purpose.
 
 **Only tested on macOS.** Window-dispatch (tmux/Terminal.app/VS
 Code/IntelliJ activation) uses AppleScript and is macOS-only outright;
-the rest (daemon, hook.sh, serial protocol) may work elsewhere but
-hasn't been tried.
-
-### Adafruit MacroPad RP2040 Working Example
-
-![MacroPad in action example](./adafruit.macropad.rp2040.png)
+the rest (daemon, hook.sh, HID protocol) may work elsewhere but hasn't
+been tried.
 
 ### NuPhy Air75 V2 (QMK) Working Example
 
@@ -76,63 +74,36 @@ hasn't been tried.
 
 | Path                                | Description                                                                                               |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `daemon.py`                         | Host-side daemon: Unix socket server + serial/HID link to the pad                                         |
+| `daemon.py`                         | Host-side daemon: Unix socket server + hook-event → pad-state mapping + idle-release orchestration        |
+| `pad_link.py`                       | Owns the HID connection to the pad: discovery, open/close, read/write, reconnection                       |
 | `hid_protocol.py`                   | Wire-level binary report format for the HID transport (QMK-based pads) — see [Protocol](#protocol)        |
 | `fake_hooks.py`                     | Simulates a Claude Code session's hook events, for testing the daemon without real hooks wired up         |
 | `hid_bringup_test.py`               | Standalone hello/RGB round-trip check against a real QMK pad, independent of `daemon.py`                  |
 | `qmk-userspace/`                    | QMK userspace overlay, built against a separate local QMK checkout — `users/claude_macropad/` holds the protocol/state logic shared by every board's keymap; `keyboards/.../keymaps/claude_macropad/` holds each board's own layout, LED map, and device ID. Keychron K1 Pro also ships `keyboards/keychron/k1_pro/k1_pro.c.patch`, a small patch applied to that board's own (unmodified-otherwise) firmware checkout — see [QMK keyboard (Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified) for why |
 | `requirements.txt`                  | Python dependencies for the daemon                                                                        |
 | `requirements-dev.txt`              | Adds `pytest` on top of `requirements.txt`, for running the test suite                                    |
-| `tests/`                            | `pytest` suite for `daemon.py` and `rp2040/code.py` (see [Testing](#testing))                             |
-| `rp2040/boot.py`                    | Enables the USB serial data endpoint (runs on device boot) — copied onto the MacroPad's CIRCUITPY drive   |
-| `rp2040/code.py`                    | Main device loop: renders pad state, reads key/encoder input — copied onto the MacroPad's CIRCUITPY drive |
+| `tests/`                            | `pytest` suite for `daemon.py`, `pad_link.py`, and `hid_protocol.py` (see [Testing](#testing))             |
 | `claude/example_hook_settings.json` | `hooks` block to merge into `settings.json`, wiring every relevant event to `hook.sh`                     |
 | `claude/hook.sh`                    | Reads a hook payload from stdin, enriches it, and forwards it to the daemon's socket                      |
 
 ## How it fits together
 
 ```
-Claude Code hooks --> hook.sh -->   daemon.py    <-- USB serial --> MacroPad RP2040
-                                  (Unix socket)  <-- USB HID    --> QMK keyboard
+Claude Code hooks --> hook.sh -->   daemon.py    <-- USB HID --> QMK keyboard
+                                  (Unix socket)
 ```
 
 `daemon.py` listens on a Unix domain socket at `~/.claude-macropad/daemon.sock`
 for line-delimited JSON hook payloads, maps each one to a display state
-for the originating session, and pushes that state to the pad over
-USB serial (MacroPad) or USB HID (QMK keyboard). It also reads events
-back from the pad (key presses, encoder turns on the MacroPad) and
-logs them.
+for the originating session, and pushes that state to the pad over USB
+HID. It also reads events back from the pad (key presses) and
+dispatches them.
 
 ## Hardware
 
 Any pad needs **a USB-C cable that carries data, not just power.** A
-lot of USB-C cables are charge-only; both the serial link (MacroPad)
-and the HID link (QMK boards) need one that actually supports data
-transfer. Beyond that, requirements depend on which pad you're
-building.
-
-### Adafruit MacroPad RP2040
-
-Beyond the [MacroPad RP2040](https://www.adafruit.com/product/5100)
-board itself, getting a fully functional pad requires:
-
-1. **The base board** (linked above).
-2. **12 MX-compatible mechanical switches, with RGB support.** This
-   project is built on Cherry MX Red RGB switches. Get RGB-capable
-   switches specifically — without them, the [color-coded states above](#pad-states)
-   have nowhere to show, and the pad's usefulness drops to just the
-   OLED text and window-selection on keypress.
-3. **12 MX-compatible keycaps** (technically optional — the switches
-   work bare). To actually see the color, the keycaps need to
-   shine-through (translucent), not opaque.
-
-If you can get the [MacroPad RP2040 Starter
-Kit](https://www.adafruit.com/product/5128), it bundles the board, RGB
-switches, and keycaps together — the simplest path when it's in stock.
-
-Otherwise, buy the bare-bones board, switches, and keycaps separately.
-An [acrylic enclosure](https://www.adafruit.com/product/5103) is also
-available and optional, but recommended for protecting the board.
+lot of USB-C cables are charge-only, and the HID link needs one that
+actually supports data transfer.
 
 ### QMK keyboards (NuPhy Air75 V2 and others)
 
@@ -151,34 +122,14 @@ Pro](https://www.keychron.com/products/keychron-k1-pro-qmk-via-wireless-custom-m
 
 ### 1. Flash your pad
 
-Flashing is entirely different between the two pads — CircuitPython
-file copy for the MacroPad, a QMK firmware build/flash for QMK boards.
 Follow whichever subsection matches your hardware; the rest of Setup
 (steps 2-4 below) is shared.
-
-#### Adafruit MacroPad RP2040
-
-1. Put the MacroPad RP2040 into CircuitPython (see
-   [Adafruit's guide](https://learn.adafruit.com/adafruit-macropad-rp2040)
-   if it isn't already).
-2. From the [Adafruit CircuitPython Library
-   Bundle](https://circuitpython.org/libraries) matching your device's
-   CircuitPython version, copy these into `CIRCUITPY/lib`:
-   - `adafruit_macropad`
-   - `adafruit_display_text`
-   - `adafruit_debouncer`
-   - `neopixel`
-   - `adafruit_bus_device`
-3. Copy [`rp2040/boot.py`](rp2040/boot.py) and [`rp2040/code.py`](rp2040/code.py)
-   to the root of `CIRCUITPY`, overwriting any existing `boot.py`/`code.py`.
-4. Reset the board (a fresh `boot.py` only takes effect after a reset,
-   not a soft reload). All 12 keys should light up dim gray ("idle").
 
 #### QMK keyboard (NuPhy Air75 V2)
 
 Verified against real hardware. 4 slots wired by default (PageUp/PageDn/Home/End), each
 showing one Claude Code session's state via per-key RGB, and pressing one brings that
-session's window to the front (same `dispatch_bring_to_front` the RP2040 uses). On boards
+session's window to the front (`dispatch_bring_to_front` in `daemon.py`). On boards
 built with `VIA_ENABLE` (this one is), up to 8 slots are reachable from the VIA app — drag
 one of the "AI Slot 4".."AI Slot 7" custom keycodes (see `via.json` in the keymap directory)
 onto any spare key in the [VIA app](https://www.caniusevia.com/) and it lights up
@@ -221,12 +172,16 @@ python3 hid_bringup_test.py
 
 ##### Using the VIA app
 
-**The VIA app and `daemon.py` can't run at the same time.** Both talk to the same raw HID
-interface (our protocol deliberately shares VIA's endpoint rather than using a separate one),
-and macOS enforces exclusive access to it at the OS level — whichever one opens it first locks
-the other out, and VIA will report the keyboard as "not responding like a VIA-enabled keyboard"
-if it loses that race. **Stop the daemon before opening VIA**, and restart it once you're done
-reassigning keys.
+**The VIA app and `daemon.py` can't hold the pad open at the same time.** Both talk to the
+same raw HID interface (our protocol deliberately shares VIA's endpoint rather than using a
+separate one), and macOS enforces exclusive access to it at the OS level — whichever one opens
+it first locks the other out, and VIA will report the keyboard as "not responding like a
+VIA-enabled keyboard" if it loses that race. The daemon only holds the interface open while at
+least one Claude Code session is active (see [Run the daemon](#2-run-the-daemon)), releasing it
+a few seconds after the last one ends — so in practice this just means: **open VIA while no
+session is running**, or wait a few seconds after your last session ends. If VIA still reports
+the keyboard as unresponsive, the daemon likely has an active session and hasn't released the
+handle yet; stop it manually (or end the session) and retry.
 
 To reassign slots (e.g. to move a default slot off PageUp/PageDn/Home/End, or to put "AI Slot
 4".."AI Slot 7" on a spare key):
@@ -308,7 +263,7 @@ through every state correctly.
 
 Slot wiring, VIA reassignment, and the VIA/daemon exclusivity rule are all the same as [the
 Air75 board above](#qmk-keyboard-nuphy-air75-v2) — same 4 default slots (PageUp/PageDn/Home/End),
-same `claude_macropad`-named keymap directory, same "stop the daemon before opening VIA" rule,
+same `claude_macropad`-named keymap directory, same idle-release behavior for VIA access,
 same `via.json`-loading Design-tab step (load
 [this board's `via.json`](qmk-userspace/keyboards/keychron/k1_pro/ansi/rgb/keymaps/claude_macropad/via.json)
 instead, which extends Keychron's own official VIA definition for this board rather than
@@ -327,39 +282,30 @@ pip install -r requirements.txt
 python3 daemon.py
 ```
 
-The daemon auto-detects the pad on startup (`AutoPadLink` in
-[`daemon.py`](daemon.py)): it tries serial discovery first — scanning
-USB serial devices for Adafruit's vendor ID, sending each a
-`{"t": "ping"}`, and attaching to whichever one answers
-`{"t": "hello", "device": "claude-macropad-v1"}` (see the `ping`/`hello`
-handshake in [`rp2040/code.py`](rp2040/code.py) and `discover_port()`
-in `daemon.py`) — then falls back to HID discovery for a QMK-based pad,
+The daemon auto-detects the pad (`pad_link.discover_hid_pad()`),
 trying each board in `hid_protocol.KNOWN_HID_PADS` (NuPhy Air75 V2,
-Keychron K1 Pro) in turn via `discover_hid_pad()` until one answers.
-No need to look up `/dev/cu.usbmodem*` by hand or update it after a
-replug.
+Keychron K1 Pro) in turn — sending each candidate raw-HID interface a
+ping and attaching to whichever one answers hello first via
+`discover_hid_device()`. No need to look up device paths by hand or
+update them after a replug.
 
-Force one transport explicitly with `MACROPAD_TRANSPORT`, and/or skip
-serial discovery with `MACROPAD_SERIAL_PORT`:
+Needs `pip install hid` (already in `requirements.txt`) plus the
+native hidapi library (`brew install hidapi` on macOS) — both
+optional, and skipped gracefully (falls back to headless, same as
+finding no pad at all) if either is missing.
 
-```
-MACROPAD_TRANSPORT=serial MACROPAD_SERIAL_PORT=/dev/cu.usbmodem14201 python3 daemon.py
-MACROPAD_TRANSPORT=hid python3 daemon.py
-```
+If no pad is found, the daemon still runs — it just logs what it
+_would_ send instead of writing to the device. This lets you develop
+against the socket/slot-mapping logic without any hardware plugged in.
 
-**Use the `/dev/cu.*` device, not `/dev/tty.*`** — the `tty` node blocks
-on carrier-detect and can hang `pyserial`'s `Serial()` open call until
-the board is unplugged.
-
-HID transport additionally needs `pip install hid` (uncomment it in
-`requirements.txt`) plus the native hidapi library (`brew install
-hidapi` on macOS) — both optional, and skipped gracefully (falls back
-to headless, same as finding no pad at all) if either is missing.
-
-If no pad is found on either transport, the daemon still runs — it
-just logs what it _would_ send instead of writing to a port. This lets
-you develop against the socket/slot-mapping logic without any
-hardware plugged in.
+The daemon only holds the pad connection open while at least one
+Claude Code session is active (`Daemon._reconcile_pad()` in
+`daemon.py`) — it's released `IDLE_CLOSE_GRACE_SECONDS` (5s by
+default) after the last session ends, or shortly after startup if the
+daemon starts with none running, and reacquired lazily on the next
+`SessionStart`. This is what lets the [VIA app](#using-the-via-app)
+share the same raw HID interface without you having to manually stop
+the daemon first — see that section for the exclusivity details.
 
 Before it starts accepting hook events, the daemon also seeds slots
 for any Claude Code sessions that were *already* running — e.g. a
@@ -452,38 +398,38 @@ pip install -r requirements-dev.txt
 python3 -m pytest
 ```
 
-All tests run against fakes — no real serial port, HID device, socket,
-or hardware needed (not even the native hidapi library — a fake `hid`
-module stands in for it):
+All tests run against fakes — no real HID device, socket, or hardware
+needed (not even the native hidapi library — a fake `hid` module
+stands in for it):
 
-- `daemon.py`'s logic (`hook_to_state`, `SlotManager`, `Daemon.handle_hook_event`,
-  stall escalation, port `discover_port()`, window-dispatch fallthrough)
-  is tested directly, with `serial.Serial`, `subprocess.run`, and
-  `SerialPadLink.write_json` swapped for recording fakes via `monkeypatch`.
-- `HidPadLink`, `discover_hid_device()`, and `AutoPadLink`'s
-  serial-then-HID fallback order are tested the same way, against a
-  fake `hid` module (`tests/test_hid_pad_link.py`) mirroring the
-  serial fakes above — including a fake raw-HID interface that only
-  answers on the right `usage_page`/`usage`, like the real board's
-  raw HID endpoint alongside its normal keyboard interfaces.
+- `daemon.py`'s logic (`hook_to_state`, `SlotManager`,
+  `Daemon.handle_hook_event`, stall escalation, window-dispatch
+  fallthrough) is tested directly, with `subprocess.run` and
+  `HidPadLink.write_json` swapped for recording fakes via
+  `monkeypatch`.
+- `pad_link.HidPadLink` and `discover_hid_device()` are tested against
+  a fake `hid` module (`tests/test_hid_pad_link.py`) — including a
+  fake raw-HID interface that only answers on the right
+  `usage_page`/`usage`, like the real board's raw HID endpoint
+  alongside its normal keyboard interfaces — and its `open()`/`close()`
+  reentrancy (safe to call repeatedly on the same instance, needed by
+  the idle-release cycle below).
 - `hid_protocol.py`'s report encode/decode round-trips
   (`tests/test_hid_protocol.py`).
-- The slots-from-handshake path (`PadTransport.handshake()` on both
-  transports, `AutoPadLink`'s delegation, `Daemon.apply_handshake()`)
-  is tested in `tests/test_pad_handshake.py`, including the
-  timeout/no-reply/headless cases.
+- The slots-from-handshake path (`HidPadLink.handshake()`,
+  `Daemon.apply_handshake()`) is tested in `tests/test_pad_handshake.py`,
+  including the timeout/no-reply/headless cases.
 - Startup seeding of pre-existing sessions (`discover_running_sessions()`,
   `Daemon.seed_existing_sessions()`, and the tty/tmux-pane backfill
   helpers) is tested in `tests/test_seed_existing_sessions.py`, with
   `subprocess.run` swapped for a recording fake the same way as the
   other discovery tests.
-- `rp2040/code.py`'s protocol/state logic (`read_json_lines`,
-  `handle_message`, `redraw`, `pixel_color`) is tested by importing the
-  file with its CircuitPython-only imports (`usb_cdc`, `displayio`,
-  `adafruit_macropad`, ...) swapped for minimal fakes — see the `pad`
-  fixture in `tests/conftest.py`. Its `while True` main loop is behind
-  `def main(): ... if __name__ == "__main__": main()`, so importing it
-  for tests doesn't hang the way running it as a script would.
+- The idle-release orchestration (`Daemon._reconcile_pad()`,
+  `Daemon._kick_reconcile()` — opening the pad when a session starts,
+  closing it after `IDLE_CLOSE_GRACE_SECONDS` once the last one ends,
+  and staying open if a new session starts before that delay elapses)
+  is tested in `tests/test_pad_idle_release.py` against a fake pad
+  that just tracks open()/close() calls.
 
 ## Protocol
 
@@ -497,7 +443,7 @@ of a Claude Code hook payload. Recognized fields:
 | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `hook_event_name`   | Selects the resulting pad state (see below)                                                                      |
 | `session_id`        | Identifies which pad slot this event belongs to                                                                  |
-| `cwd`               | Project folder name, used as the slot's OLED label (MacroPad only — QMK pads are RGB-only, no label)             |
+| `cwd`               | Project folder name — used for VS Code/IntelliJ window-dispatch matching (QMK pads are RGB-only, no on-device label) |
 | `tool_name`         | Distinguishes attention-worthy tools (`AskUserQuestion`, `ExitPlanMode`) and labels the slot during `PreToolUse` |
 | `notification_type` | Distinguishes `Notification` subtypes (`agent_needs_input`, `idle_prompt`, ...)                                  |
 | `tmux_pane`         | tmux pane id, for the "bring to front" key-press dispatch                                                        |
@@ -532,55 +478,20 @@ clobbered back to `tool_stalled` once the threshold elapses from the
 original `PreToolUse`.
 
 Slots are allocated first-fit and freed on `SessionEnd`. The number of
-slots comes from the pad's own `hello` handshake at startup (12 for the
-MacroPad RP2040, matching its key count 1:1; whatever a QMK-based pad
-reports otherwise — see `Daemon.apply_handshake()` in `daemon.py`), with
-`NUM_SLOTS` (12) used as a fallback if the pad is headless or doesn't
-answer the handshake in time.
+slots comes from the pad's own `hello` handshake at startup (whatever
+a QMK-based pad reports — see `Daemon.apply_handshake()` in
+`daemon.py`), with `NUM_SLOTS` (12) used as a fallback if the pad is
+headless or doesn't answer the handshake in time.
 
 Sessions already running when the daemon starts are seeded into slots
 up front via `claude agents --json`, rather than waiting for their next
 hook event — see `Daemon.seed_existing_sessions()` in `daemon.py` and
 [Run the daemon](#2-run-the-daemon) above.
 
-### Pad messages (daemon ↔ device)
-
-Line-delimited JSON over serial, in both directions.
-
-Daemon → device:
-
-```jsonc
-{"t": "slot", "i": 0, "state": "working", "label": "Read"}
-{"t": "clear", "i": 0}
-{"t": "ping"}
-```
-
-Device → daemon:
-
-```jsonc
-{"t": "key", "i": 0}
-{"t": "enc", "d": 1}
-{"t": "enc_click"}
-{"t": "hello", "device": "claude-macropad-v1", "slots": 12}
-```
-
-`ping`/`hello` is the handshake port auto-discovery uses (see above) to
-confirm a given serial device is actually the pad, not some other
-CircuitPython board.
-
-A key press currently just logs which session it corresponds to and
-attempts to bring that session's window to the front (tried in order:
-tmux pane, Terminal.app tab by tty, VS Code window by project name,
-IntelliJ IDEA window by project name) — all via AppleScript, so this is
-macOS-only for now. Encoder events are logged only; nothing consumes
-them yet.
-
 ### Pad messages (HID reports)
 
-For QMK-based pads (e.g. a NuPhy Air75 V2) instead of the RP2040, the same
-messages travel as fixed-size 32-byte raw HID reports rather than
-JSON lines — see `hid_protocol.py` for the encode/decode helpers and
-exact byte layout:
+Fixed-size 32-byte raw HID reports in both directions — see
+`hid_protocol.py` for the encode/decode helpers and exact byte layout:
 
 | Byte 0 (type) | Direction       | Bytes 1-2                          |
 | ------------- | --------------- | ---------------------------------- |
@@ -589,26 +500,30 @@ exact byte layout:
 | `MSG_SLOT`    | daemon → device | slot index, state (0-31, see below) |
 | `MSG_KEY`     | device → daemon | slot index                         |
 
-State bytes mirror `STATE_COLORS`'s keys in `rp2040/code.py` 1:1
-(`idle`=0, `working`=1, `waiting`=2, `done`=3, `error`=4, `question`=5,
-`tool_running`=6, `tool_stalled`=7, ..., `off`=31), so `hook_to_state`'s
-output maps identically regardless of which transport is attached.
-`off`=31 is deliberately pinned well above the states defined today
-rather than "whatever's defined last" — adding a future state only
-means picking the next unused number below it, never renumbering `off`
-(and the QMK side's `state <= STATE_OFF` bounds check, which is anchored
-to its value) again. Values in between that are reserved-but-unused
-today, or a value newer than what a given firmware build understands,
-render as the "unknown" fallback color described above. There's no
-separate "clear" report — an RGB-only pad has no label to clear, so a
-cleared slot is just `MSG_SLOT` with state `off` (fully dark — distinct
-from `idle`'s dim glow, matching `rp2040/code.py`'s own
-`handle_message()`).
+`ping`/`hello` is the handshake `discover_hid_device()` uses to confirm
+a given raw-HID interface is actually the pad, not some other board's.
 
-Key-press dispatch works the same as the serial protocol's
-`{"t": "key", "i": N}` — sent on key-down only, no key-up equivalent,
-since `on_device_event()` doesn't distinguish transports and has no
-key-up concept to consume one anyway.
+State bytes are `hid_protocol.STATE_TO_CODE`'s values (`idle`=0,
+`working`=1, `waiting`=2, `done`=3, `error`=4, `question`=5,
+`tool_running`=6, `tool_stalled`=7, ..., `off`=31) — the same values
+the QMK firmware's own state enum mirrors. `off`=31 is deliberately
+pinned well above the states defined today rather than "whatever's
+defined last" — adding a future state only means picking the next
+unused number below it, never renumbering `off` (and the QMK side's
+`state <= STATE_OFF` bounds check, which is anchored to its value)
+again. Values in between that are reserved-but-unused today, or a
+value newer than what a given firmware build understands, render as
+the "unknown" fallback color described above. There's no separate
+"clear" report — an RGB-only pad has no label to clear, so a cleared
+slot is just `MSG_SLOT` with state `off` (fully dark — distinct from
+`idle`'s dim glow).
+
+A key press is sent on key-down only (no key-up equivalent — see
+`MSG_KEY` above) and, on the daemon side, logs which session it
+corresponds to and attempts to bring that session's window to the
+front (tried in order: tmux pane, Terminal.app tab by tty, VS Code
+window by project name, IntelliJ IDEA window by project name) — all
+via AppleScript, so this is macOS-only for now.
 
 ## Logs
 
@@ -625,14 +540,29 @@ pad now works end to end:
 
 - ✅ Claude Code hook wiring (`settings.json` block + `hook.sh`)
 - ✅ Socket server + hook-event → pad-state mapping
-- ✅ Serial protocol to/from the MacroPad, with pad auto-discovery
-- ✅ HID protocol to/from QMK keyboards (e.g. NuPhy Air75 V2), same auto-discovery
+- ✅ HID protocol to/from QMK keyboards (e.g. NuPhy Air75 V2), with pad auto-discovery
 - ✅ Slot allocation for concurrent sessions
 - ✅ Key-press → bring-window-to-front dispatch (macOS)
 - ✅ Startup seeding of already-running sessions (`claude agents --json`)
+- ✅ Idle-release: the pad connection closes when no session is active, freeing it for VIA
 - ⚠️ Keychron K1 Pro (ANSI) QMK keymap — written against Keychron's own official firmware
   source, unverified on real hardware (see [QMK keyboard (Keychron K1 Pro,
   unverified)](#qmk-keyboard-keychron-k1-pro-unverified))
+
+## Prior hardware: Adafruit MacroPad RP2040
+
+Earlier versions of this project also supported the [Adafruit MacroPad
+RP2040](https://www.adafruit.com/product/5100) over USB serial
+(CircuitPython, a 12-key macropad with an OLED label per slot). That
+support has been removed — this project has moved fully to QMK/HID
+boards — but the firmware, host-side serial transport, and docs are
+still browsable at the last commit that had them:
+[`rp2040/`](https://github.com/pickypg/claude-macropad/tree/35ae51c7795e9f09feca3bb8bfdeea76b58eb60f/rp2040)
+(and that commit's
+[README](https://github.com/pickypg/claude-macropad/blob/35ae51c7795e9f09feca3bb8bfdeea76b58eb60f/README.md)
+for the full serial protocol writeup and build steps).
+
+![MacroPad in action example](./adafruit.macropad.rp2040.png)
 
 ## License
 

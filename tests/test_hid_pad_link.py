@@ -1,8 +1,8 @@
 import time
 import types
 
-import daemon
 import hid_protocol
+import pad_link
 
 
 class FakeHidException(Exception):
@@ -12,17 +12,16 @@ class FakeHidException(Exception):
 class FakeHidDevice:
     """Stands in for hid.Device(path=...). `responses` maps device
     path -> the raw report bytes it should hand back on read(), once —
-    same one-shot-reply shape as test_discover_port.py's
-    FakeSerialPort — but only *after* an actual MSG_PING has been
-    written to it, not unconditionally on the first read(). This
-    matters once a background reader thread is involved (handshake()
-    tests, not just discover_hid_device()'s own synchronous probing):
-    without gating on a real ping, a queued reply could get delivered
-    to whichever read() happens to run first — the persistent
-    connection's reader thread racing a later explicit handshake()
-    call — rather than only in response to that call's own ping. A
-    brief sleep on the "nothing to read" path mimics hidapi's
-    blocking-with-timeout read() instead of busy-looping the thread.
+    but only *after* an actual MSG_PING has been written to it, not
+    unconditionally on the first read(). This matters once a
+    background reader thread is involved (handshake() tests, not just
+    discover_hid_device()'s own synchronous probing): without gating
+    on a real ping, a queued reply could get delivered to whichever
+    read() happens to run first — the persistent connection's reader
+    thread racing a later explicit handshake() call — rather than only
+    in response to that call's own ping. A brief sleep on the "nothing
+    to read" path mimics hidapi's blocking-with-timeout read() instead
+    of busy-looping the thread.
     """
 
     def __init__(self, path, responses=None):
@@ -74,7 +73,7 @@ def make_fake_hid(devices, responses=None, open_failures=None):
 
 
 def make_candidate(path, vid=hid_protocol.NUPHY_AIR75_V2.vid, pid=hid_protocol.NUPHY_AIR75_V2.pid,
-                    usage_page=daemon.RAW_USAGE_PAGE, usage=daemon.RAW_USAGE_ID):
+                    usage_page=pad_link.RAW_USAGE_PAGE, usage=pad_link.RAW_USAGE_ID):
     return {
         "path": path, "vendor_id": vid, "product_id": pid,
         "usage_page": usage_page, "usage": usage,
@@ -89,8 +88,8 @@ def hello_report(device_id=hid_protocol.DEVICE_ID_AIR75_V2, slots=16):
 
 def test_discover_hid_device_returns_none_with_no_candidates(monkeypatch):
     fake = make_fake_hid([])
-    monkeypatch.setattr(daemon, "hid", fake)
-    assert daemon.discover_hid_device(hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid) is None
+    monkeypatch.setattr(pad_link, "hid", fake)
+    assert pad_link.discover_hid_device(hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid) is None
 
 
 def test_discover_hid_device_ignores_wrong_usage_page(monkeypatch):
@@ -98,17 +97,17 @@ def test_discover_hid_device_ignores_wrong_usage_page(monkeypatch):
     # normal boot-keyboard interface — must never be probed as the pad.
     devices = [make_candidate(b"iface0", usage_page=0x0001, usage=0x06)]
     fake = make_fake_hid(devices)
-    monkeypatch.setattr(daemon, "hid", fake)
-    assert daemon.discover_hid_device(hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid) is None
+    monkeypatch.setattr(pad_link, "hid", fake)
+    assert pad_link.discover_hid_device(hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid) is None
 
 
 def test_discover_hid_device_picks_interface_that_replies_hello(monkeypatch):
     devices = [make_candidate(b"iface0"), make_candidate(b"iface1")]
     responses = {b"iface1": hello_report()}
     fake = make_fake_hid(devices, responses)
-    monkeypatch.setattr(daemon, "hid", fake)
+    monkeypatch.setattr(pad_link, "hid", fake)
 
-    assert daemon.discover_hid_device(
+    assert pad_link.discover_hid_device(
         hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid, handshake_timeout=0.05
     ) == b"iface1"
 
@@ -117,9 +116,9 @@ def test_discover_hid_device_skips_interface_that_fails_to_open(monkeypatch):
     devices = [make_candidate(b"busy"), make_candidate(b"iface1")]
     responses = {b"iface1": hello_report()}
     fake = make_fake_hid(devices, responses, open_failures={b"busy"})
-    monkeypatch.setattr(daemon, "hid", fake)
+    monkeypatch.setattr(pad_link, "hid", fake)
 
-    assert daemon.discover_hid_device(
+    assert pad_link.discover_hid_device(
         hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid, handshake_timeout=0.05
     ) == b"iface1"
 
@@ -127,30 +126,30 @@ def test_discover_hid_device_skips_interface_that_fails_to_open(monkeypatch):
 def test_discover_hid_device_returns_none_when_nothing_replies(monkeypatch):
     devices = [make_candidate(b"iface0")]
     fake = make_fake_hid(devices)
-    monkeypatch.setattr(daemon, "hid", fake)
+    monkeypatch.setattr(pad_link, "hid", fake)
 
-    assert daemon.discover_hid_device(
+    assert pad_link.discover_hid_device(
         hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid, handshake_timeout=0.05
     ) is None
 
 
 def test_discover_hid_device_returns_none_when_hid_unavailable(monkeypatch):
-    monkeypatch.setattr(daemon, "hid", None)
-    assert daemon.discover_hid_device(hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid) is None
+    monkeypatch.setattr(pad_link, "hid", None)
+    assert pad_link.discover_hid_device(hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid) is None
 
 
 # --- HidPadLink --------------------------------------------------------
 
 def test_hidpadlink_open_headless_when_hid_unavailable(monkeypatch):
-    monkeypatch.setattr(daemon, "hid", None)
-    link = daemon.HidPadLink(lambda msg: None)
+    monkeypatch.setattr(pad_link, "hid", None)
+    link = pad_link.HidPadLink(lambda msg: None)
     link.open()
     assert link.attached is False
 
 
 def test_hidpadlink_open_headless_when_nothing_found(monkeypatch):
-    monkeypatch.setattr(daemon, "hid", make_fake_hid([]))
-    link = daemon.HidPadLink(lambda msg: None)
+    monkeypatch.setattr(pad_link, "hid", make_fake_hid([]))
+    link = pad_link.HidPadLink(lambda msg: None)
     link.open()
     assert link.attached is False
 
@@ -158,23 +157,47 @@ def test_hidpadlink_open_headless_when_nothing_found(monkeypatch):
 def test_hidpadlink_open_attaches_and_closes_cleanly(monkeypatch):
     devices = [make_candidate(b"iface0")]
     responses = {b"iface0": hello_report()}
-    monkeypatch.setattr(daemon, "hid", make_fake_hid(devices, responses))
+    monkeypatch.setattr(pad_link, "hid", make_fake_hid(devices, responses))
 
-    link = daemon.HidPadLink(lambda msg: None)
+    link = pad_link.HidPadLink(lambda msg: None)
+    link.open()
+    dev = link._dev
+    try:
+        assert link.attached is True
+    finally:
+        link.close()
+    assert dev.closed is True
+
+
+def test_hidpadlink_close_resets_state_for_reopen(monkeypatch):
+    # close() must leave the instance safe to open() again — see
+    # pad_link.py's module docstring: Daemon._reconcile_pad() cycles
+    # the same HidPadLink open/closed repeatedly rather than treating
+    # open()/close() as a one-shot startup/shutdown pair.
+    devices = [make_candidate(b"iface0")]
+    responses = {b"iface0": hello_report()}
+    monkeypatch.setattr(pad_link, "hid", make_fake_hid(devices, responses))
+
+    link = pad_link.HidPadLink(lambda msg: None)
+    link.open()
+    assert link.attached is True
+    link.close()
+    assert link.attached is False
+    assert link._dev is None
+
     link.open()
     try:
         assert link.attached is True
     finally:
         link.close()
-    assert link._dev.closed is True
 
 
 def test_hidpadlink_write_json_translates_slot(monkeypatch):
     devices = [make_candidate(b"iface0")]
     responses = {b"iface0": hello_report()}
-    monkeypatch.setattr(daemon, "hid", make_fake_hid(devices, responses))
+    monkeypatch.setattr(pad_link, "hid", make_fake_hid(devices, responses))
 
-    link = daemon.HidPadLink(lambda msg: None)
+    link = pad_link.HidPadLink(lambda msg: None)
     link.open()
     try:
         link.write_json({"t": "slot", "i": 3, "state": "working", "label": "Read"})
@@ -189,14 +212,14 @@ def test_hidpadlink_write_json_translates_slot(monkeypatch):
 
 
 def test_hidpadlink_write_json_translates_clear_to_off(monkeypatch):
-    # Not STATE_IDLE — rp2040/code.py's handle_message() shows "clear"
-    # is fully dark, distinct from "idle"'s dim glow (a session that's
-    # merely quiet vs. no session mapped here at all).
+    # Not STATE_IDLE — a cleared slot is fully dark, distinct from
+    # "idle"'s dim glow (a session that's merely quiet vs. no session
+    # mapped here at all).
     devices = [make_candidate(b"iface0")]
     responses = {b"iface0": hello_report()}
-    monkeypatch.setattr(daemon, "hid", make_fake_hid(devices, responses))
+    monkeypatch.setattr(pad_link, "hid", make_fake_hid(devices, responses))
 
-    link = daemon.HidPadLink(lambda msg: None)
+    link = pad_link.HidPadLink(lambda msg: None)
     link.open()
     try:
         link.write_json({"t": "clear", "i": 5})
@@ -209,77 +232,7 @@ def test_hidpadlink_write_json_translates_clear_to_off(monkeypatch):
 
 
 def test_hidpadlink_write_json_headless_is_a_noop(monkeypatch):
-    monkeypatch.setattr(daemon, "hid", None)
-    link = daemon.HidPadLink(lambda msg: None)
+    monkeypatch.setattr(pad_link, "hid", None)
+    link = pad_link.HidPadLink(lambda msg: None)
     link.open()
     link.write_json({"t": "slot", "i": 0, "state": "idle"})  # must not raise
-
-
-# --- transport selection -------------------------------------------------
-
-def test_make_pad_link_serial(monkeypatch):
-    monkeypatch.setattr(daemon, "TRANSPORT", "serial")
-    assert isinstance(daemon.make_pad_link(lambda m: None), daemon.SerialPadLink)
-
-
-def test_make_pad_link_hid(monkeypatch):
-    monkeypatch.setattr(daemon, "TRANSPORT", "hid")
-    assert isinstance(daemon.make_pad_link(lambda m: None), daemon.HidPadLink)
-
-
-def test_make_pad_link_unset_is_auto(monkeypatch):
-    monkeypatch.setattr(daemon, "TRANSPORT", None)
-    assert isinstance(daemon.make_pad_link(lambda m: None), daemon.AutoPadLink)
-
-
-def test_make_pad_link_unrecognized_falls_back_to_auto(monkeypatch):
-    monkeypatch.setattr(daemon, "TRANSPORT", "carrier-pigeon")
-    assert isinstance(daemon.make_pad_link(lambda m: None), daemon.AutoPadLink)
-
-
-def test_autopadlink_prefers_serial_when_both_answer(monkeypatch):
-    # Serial discovery succeeds ...
-    monkeypatch.setattr(daemon, "discover_port", lambda baud: "/dev/cu.usbmodem1")
-    fake_serial_port = types.SimpleNamespace(
-        read=lambda n: b"", write=lambda data: None, close=lambda: None,
-    )
-    monkeypatch.setattr(daemon.serial, "Serial", lambda *a, **k: fake_serial_port)
-
-    # ... so HID discovery must never even be attempted.
-    monkeypatch.setattr(
-        daemon, "discover_hid_device",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("HID should not be probed")),
-    )
-
-    link = daemon.AutoPadLink(lambda m: None)
-    link.open()
-    try:
-        assert isinstance(link._active, daemon.SerialPadLink)
-    finally:
-        link.close()
-
-
-def test_autopadlink_falls_back_to_hid_when_serial_finds_nothing(monkeypatch):
-    monkeypatch.setattr(daemon, "discover_port", lambda baud: None)
-
-    devices = [make_candidate(b"iface0")]
-    responses = {b"iface0": hello_report()}
-    monkeypatch.setattr(daemon, "hid", make_fake_hid(devices, responses))
-
-    link = daemon.AutoPadLink(lambda m: None)
-    link.open()
-    try:
-        assert isinstance(link._active, daemon.HidPadLink)
-        assert link._active.attached is True
-    finally:
-        link.close()
-
-
-def test_autopadlink_headless_when_neither_answers(monkeypatch):
-    monkeypatch.setattr(daemon, "discover_port", lambda baud: None)
-    monkeypatch.setattr(daemon, "hid", make_fake_hid([]))
-
-    link = daemon.AutoPadLink(lambda m: None)
-    link.open()
-    link.write_json({"t": "slot", "i": 0, "state": "idle"})  # must not raise
-    link.close()

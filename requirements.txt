@@ -1,6 +1,5 @@
-pyserial
-
-# Optional — only needed for MACROPAD_TRANSPORT=hid/auto against a QMK
-# pad (e.g. NuPhy Air75 V2). Also requires the native hidapi library
-# (e.g. `brew install hidapi` on macOS). Uncomment to install:
-# hid
+# Talks to the pad over USB HID (e.g. NuPhy Air75 V2, Keychron K1 Pro).
+# Also requires the native hidapi library (e.g. `brew install hidapi`
+# on macOS). Without it, daemon.py still runs — it just stays headless,
+# logging what it would send instead of writing to a pad.
+hid

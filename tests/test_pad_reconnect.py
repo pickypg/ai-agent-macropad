@@ -3,13 +3,11 @@ import time
 import types
 
 import daemon
-import hid_protocol
-import serial as pyserial
+import pad_link
 
 from test_hid_pad_link import (
     FakeHidDevice, FakeHidException, hello_report, make_candidate, make_fake_hid,
 )
-from test_discover_port import FakeSerialPort, hello_bytes, make_port
 
 
 # --- Daemon: pad_state cache + resync_pad -----------------------------------
@@ -73,10 +71,10 @@ def test_daemon_wires_resync_pad_as_transport_on_reattach():
 def test_hidpadlink_reconnect_rediscovers_and_reopens(monkeypatch):
     devices = [make_candidate(b"iface0")]
     responses = {b"iface0": hello_report()}
-    monkeypatch.setattr(daemon, "hid", make_fake_hid(devices, responses))
+    monkeypatch.setattr(pad_link, "hid", make_fake_hid(devices, responses))
 
     reattached = []
-    link = daemon.HidPadLink(lambda m: None, on_reattach=lambda: reattached.append(True))
+    link = pad_link.HidPadLink(lambda m: None, on_reattach=lambda: reattached.append(True))
     link.open()
     try:
         assert link.attached is True
@@ -111,9 +109,9 @@ def test_hidpadlink_reconnect_waits_until_pad_reappears(monkeypatch):
         ),
         HIDException=FakeHidException,
     )
-    monkeypatch.setattr(daemon, "hid", fake_hid)
+    monkeypatch.setattr(pad_link, "hid", fake_hid)
 
-    link = daemon.HidPadLink(lambda m: None)
+    link = pad_link.HidPadLink(lambda m: None)
     link.RECONNECT_POLL_SECONDS = 0.02
 
     def make_it_appear():
@@ -162,10 +160,10 @@ def test_hidpadlink_read_loop_reconnects_after_hid_exception(monkeypatch):
     fake_hid = types.SimpleNamespace(
         enumerate=lambda vid, pid: candidates, Device=Device, HIDException=FakeHidException,
     )
-    monkeypatch.setattr(daemon, "hid", fake_hid)
+    monkeypatch.setattr(pad_link, "hid", fake_hid)
 
     reattached = threading.Event()
-    link = daemon.HidPadLink(lambda m: None, on_reattach=reattached.set)
+    link = pad_link.HidPadLink(lambda m: None, on_reattach=reattached.set)
     link.open()
     try:
         assert link.attached is True
@@ -174,139 +172,3 @@ def test_hidpadlink_read_loop_reconnects_after_hid_exception(monkeypatch):
     finally:
         link.close()
 
-
-# --- SerialPadLink: reconnect on SerialException ----------------------------
-
-class FlakySerialConn:
-    """Like test_pad_handshake.py's FakeSerialConn, but read() can be
-    made to raise pyserial.SerialException on demand — standing in for
-    the port dying under a real disconnect."""
-
-    def __init__(self, device, reply=None, fail_reads=0):
-        self.device = device
-        self.written = b""
-        self._reply = reply
-        self._delivered = False
-        self._fail_reads = fail_reads
-
-    def write(self, data):
-        self.written += data
-        return len(data)
-
-    def read(self, n):
-        if self._fail_reads > 0:
-            self._fail_reads -= 1
-            raise pyserial.SerialException("device disconnected")
-        if self._reply and not self._delivered:
-            self._delivered = True
-            return self._reply
-        time.sleep(0.01)
-        return b""
-
-    def close(self):
-        pass
-
-
-def test_serialpadlink_reconnect_retries_forced_port(monkeypatch):
-    # MACROPAD_SERIAL_PORT pins an exact port — reconnect must keep
-    # retrying that same path rather than re-probing (which could
-    # attach to a different board if more than one is plugged in).
-    calls = []
-
-    def fake_serial(device, baud, timeout=None):
-        calls.append(device)
-        return FlakySerialConn(device)
-
-    monkeypatch.setattr(daemon.serial, "Serial", fake_serial)
-    monkeypatch.setattr(
-        daemon, "discover_port",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("forced port must not re-probe")),
-    )
-
-    reattached = []
-    link = daemon.SerialPadLink(
-        "/dev/cu.fake", 115200, lambda m: None, on_reattach=lambda: reattached.append(True)
-    )
-    link.open()
-    try:
-        assert link.attached is True
-        link.attached = False
-        link._reconnect()
-        assert link.attached is True
-        assert calls == ["/dev/cu.fake", "/dev/cu.fake"]
-        assert reattached == [True]
-    finally:
-        link.close()
-
-
-class ClosableFakeSerialPort(FakeSerialPort):
-    """FakeSerialPort (test_discover_port.py) is only ever used as a
-    `with serial.Serial(...) as ser:` context manager inside
-    discover_port() itself, so it has no close(). SerialPadLink keeps
-    a persistent connection and calls .close() on it directly (both in
-    Daemon.close() and at the top of _reconnect()) — needs one here."""
-
-    def close(self):
-        pass
-
-
-def test_serialpadlink_reconnect_reprobes_when_not_forced(monkeypatch):
-    # No MACROPAD_SERIAL_PORT — the original path came from discover_port()
-    # and isn't stable across replugs, so reconnect must re-probe rather
-    # than retry a path that may no longer be valid.
-    ports = [make_port("/dev/cu.usbmodem1")]
-    monkeypatch.setattr(daemon.list_ports, "comports", lambda: ports)
-    responses = {"/dev/cu.usbmodem1": hello_bytes(daemon.PAD_DEVICE_ID)}
-    monkeypatch.setattr(
-        daemon.serial, "Serial",
-        lambda device, baud, timeout=None: ClosableFakeSerialPort(device, baud, timeout, responses),
-    )
-
-    link = daemon.SerialPadLink(None, 115200, lambda m: None)
-    link.open()
-    try:
-        assert link.attached is True
-        assert link.port == "/dev/cu.usbmodem1"
-
-        # Now simulate reconnecting after the port disappeared and came
-        # back under a new device node — must not call close() first,
-        # since that would set link._stop and short-circuit _reconnect()'s
-        # own wait loop.
-        ports2 = [make_port("/dev/cu.usbmodem7")]
-        monkeypatch.setattr(daemon.list_ports, "comports", lambda: ports2)
-        responses2 = {"/dev/cu.usbmodem7": hello_bytes(daemon.PAD_DEVICE_ID)}
-        monkeypatch.setattr(
-            daemon.serial, "Serial",
-            lambda device, baud, timeout=None: ClosableFakeSerialPort(device, baud, timeout, responses2),
-        )
-        link.attached = False
-        link._reconnect()
-
-        assert link.attached is True
-        assert link.port == "/dev/cu.usbmodem7"
-    finally:
-        link.close()
-
-
-def test_serialpadlink_read_loop_reconnects_after_serial_exception(monkeypatch):
-    open_count = [0]
-
-    def fake_serial(device, baud, timeout=None):
-        open_count[0] += 1
-        # 1st open() call is this test's initial persistent connection —
-        # its first read() should look like the pad disconnecting.
-        if open_count[0] == 1:
-            return FlakySerialConn(device, fail_reads=1)
-        return FlakySerialConn(device)
-
-    monkeypatch.setattr(daemon.serial, "Serial", fake_serial)
-
-    reattached = threading.Event()
-    link = daemon.SerialPadLink("/dev/cu.fake", 115200, lambda m: None, on_reattach=reattached.set)
-    link.open()
-    try:
-        assert link.attached is True
-        assert reattached.wait(timeout=2.0), "on_reattach never fired"
-        assert link.attached is True
-    finally:
-        link.close()

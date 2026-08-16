@@ -48,9 +48,9 @@ def test_state_off_is_pinned_with_headroom_for_future_states():
 
 def test_pack_slot_off_is_distinct_from_idle():
     # "off" (cleared, no session mapped) and "idle" (a session is
-    # mapped but quiet) must be different wire values — see
-    # rp2040/code.py's handle_message(), which renders them as
-    # different colors (fully dark vs. a dim glow).
+    # mapped but quiet) must be different wire values — the QMK
+    # firmware renders them as different colors (fully dark vs. a dim
+    # glow).
     idle_report = hid_protocol.pack_slot(0, "idle")
     off_report = hid_protocol.pack_slot(0, "off")
     assert idle_report[2] == hid_protocol.STATE_IDLE
