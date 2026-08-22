@@ -7,13 +7,18 @@ Usage:
     python3 fake_hooks.py                       # one simulated Claude Code session
     python3 fake_hooks.py --sessions 3          # three concurrent sessions, staggered
     python3 fake_hooks.py --agent codex         # simulate a Codex CLI session instead
+    python3 fake_hooks.py --agent grok-build    # simulate a Grok Build session instead
 
 --agent only changes which event sequence gets simulated (see
 simulate_session() below) and tags payloads with "agent" accordingly —
 daemon.py's own mapping logic doesn't fork per agent, so this is purely
-about exercising the two real event vocabularies (see hook_to_state()'s
-docstring in daemon.py for exactly where Claude Code's and Codex's
-hooks diverge).
+about exercising each agent's real event vocabulary (see
+hook_to_state()'s docstring in daemon.py for exactly where they
+diverge). All three simulators speak the shared post-translation
+PascalCase shape hook_to_state() expects — for Grok Build, that's
+already through the same camelCase/snake_case-value -> PascalCase
+translation grok/hook.sh does for a real session, not Grok's own native
+wire format.
 """
 import argparse
 import json
@@ -118,9 +123,59 @@ def simulate_codex_session(base):
     send({**base, "hook_event_name": "SessionEnd"})
 
 
+def simulate_grok_build_session(base):
+    # Grok Build's own hook payloads are camelCase with snake_case
+    # event-name values (e.g. "pre_tool_use") and get translated to
+    # this vocabulary by grok/hook.sh before they ever reach the
+    # daemon — so, same as the other two simulators, this speaks the
+    # already-translated PascalCase shape hook_to_state() expects, not
+    # Grok's own wire format. Tool name ("run_terminal_command") and
+    # the permission_prompt/idle_prompt Notification subtypes are the
+    # real values — confirmed live against actual Grok Build hook
+    # payloads (see grok/hook.sh's and hook_to_state()'s docstrings for
+    # what's Grok-specific here: no PermissionRequest-style event,
+    # Notification:permission_prompt is the reliable "blocked on you"
+    # signal instead).
+    send({**base, "hook_event_name": "SessionStart"})
+    time.sleep(0.5)
+
+    send({**base, "hook_event_name": "UserPromptSubmit"})
+    time.sleep(0.5)
+
+    send({**base, "hook_event_name": "PreToolUse", "tool_name": "run_terminal_command"})
+    time.sleep(0.5)
+
+    # A permission UI is actually waiting on you — confirmed live and
+    # reliable for Grok Build, unlike Claude Code's version of this
+    # same Notification subtype
+    send({
+        **base,
+        "hook_event_name": "Notification",
+        "notification_type": "permission_prompt",
+    })
+    time.sleep(2.0)
+
+    send({**base, "hook_event_name": "PostToolUse", "tool_name": "run_terminal_command"})
+    time.sleep(0.5)
+
+    # lower-urgency notification — Grok Build's just idle, not blocked
+    send({
+        **base,
+        "hook_event_name": "Notification",
+        "notification_type": "idle_prompt",
+    })
+    time.sleep(1.5)
+
+    send({**base, "hook_event_name": "Stop"})  # -> done
+    time.sleep(1.0)
+
+    send({**base, "hook_event_name": "SessionEnd"})
+
+
 SIMULATORS = {
     "claude-code": simulate_claude_code_session,
     "codex": simulate_codex_session,
+    "grok-build": simulate_grok_build_session,
 }
 
 

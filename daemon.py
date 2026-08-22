@@ -22,18 +22,21 @@ in.
 The wire protocol (one JSON object per line on the Unix socket — see
 handle_hook_event() below) isn't tied to any one agent: any hook/
 notification source that speaks it can drive a slot, as long as its
-payload carries at least hook_event_name and session_id. Two adapters
-ship in this repo today, one per agent's own hook system —
-claude/hook.sh (Claude Code) and codex/hook.sh (Codex CLI) — both
-translating their agent's native hook JSON into this shape and
-forwarding it here; see the "Agents tested" table in the README for
-which agents actually have one. Each adapter tags its payload with an
-"agent" field (see Daemon.session_agents below) purely for logging/
-bookkeeping — it has no effect on how an event maps to a pad state.
-Claude Code's and Codex's hook event vocabularies overlap almost
-entirely (same event names, same core fields), so hook_to_state()
-below is shared rather than forked per agent; see its docstring for
-the handful of places they diverge.
+payload carries at least hook_event_name and session_id. Three
+adapters ship in this repo today, one per agent's own hook system —
+claude/hook.sh (Claude Code), codex/hook.sh (Codex CLI), and
+grok/hook.sh (Grok Build) — each translating its agent's native hook
+JSON into this shape and forwarding it here; see the "Agents tested"
+table in the README for which agents actually have one. Each adapter
+tags its payload with an "agent" field (see Daemon.session_agents
+below) purely for logging/bookkeeping — it has no effect on how an
+event maps to a pad state. Claude Code's and Codex's hook event
+vocabularies overlap almost entirely (same event names, same core
+fields); Grok Build's overlaps too, but arrives in a different shape
+(camelCase fields, snake_case event-name values) that grok/hook.sh
+translates before forwarding — see its own comments. hook_to_state()
+below is one shared mapping table across all three rather than forked
+per agent; see its docstring for the handful of places they diverge.
 
 The HID handle is only held open while at least one agent session is
 active — see Daemon._reconcile_pad(). It's released
@@ -166,12 +169,30 @@ def hook_to_state(event_name, tool_name=None, notification_type=None):
     means Claude is fully stalled until you answer, same urgency as
     AskUserQuestion, so it maps to "question" too. idle_prompt
     (Claude's been idle 60s+) is lower-stakes and stays "waiting".
-    permission_prompt is deliberately NOT handled here — confirmed
-    unreliable in practice (never fired for a real "Allow this
-    command?" prompt, even on a current Claude Code version).
-    PermissionRequest, handled separately below, is the working
-    replacement for that specific case, and — unlike Notification — is
-    shared with Codex.
+    permission_prompt was long deliberately NOT handled here for Claude
+    Code — confirmed unreliable in practice there (never fired for a
+    real "Allow this command?" prompt, even on a current Claude Code
+    version) — PermissionRequest, handled separately below, was the
+    working replacement for that case. It's handled now because Grok
+    Build (confirmed live, and per its own hooks reference) fires
+    Notification:permission_prompt reliably, and only when a permission
+    UI is genuinely waiting on you, unlike Claude Code's version of the
+    same subtype — harmless to also enable for Claude Code since it
+    simply may never fire there.
+
+    Grok Build's own three turn-end events — Stop, StopFailure,
+    StopCancelled, confirmed live and cross-checked against its hooks
+    reference — have no Claude Code/Codex equivalent (those two only
+    ever send Stop): StopFailure (a turn ended on an API error) maps to
+    "error" like PostToolUseFailure; StopCancelled (a turn ended
+    without completing — user interrupt, declined permission, hit
+    --max-turns, ...) maps to "done" like a normal Stop, since either
+    way the agent isn't actively working anymore. Grok Build also sends
+    a Stop with reason "channel_closed"/"shutdown" at session teardown,
+    strictly after SessionEnd already freed the slot (confirmed live) —
+    grok/hook.sh drops that one before it ever reaches this function
+    (see its own comments) rather than teaching this shared function
+    about a "reason" field no other agent sends.
     """
     if event_name == "PreToolUse" and tool_name in ATTENTION_TOOLS:
         return "question"
@@ -184,11 +205,11 @@ def hook_to_state(event_name, tool_name=None, notification_type=None):
         return "question"
 
     if event_name == "Notification":
-        if notification_type == "agent_needs_input":
+        if notification_type in ("agent_needs_input", "permission_prompt"):
             return "question"
         if notification_type == "idle_prompt":
             return "waiting"
-        return None  # other subtypes (auth_success, elicitation_*, ...) — no state change
+        return None  # other subtypes (auth_success, elicitation_*, task_complete, ...) — no state change
 
     return {
         "SessionStart": "idle",
@@ -197,6 +218,8 @@ def hook_to_state(event_name, tool_name=None, notification_type=None):
         "PostToolUse": "working",
         "PostToolUseFailure": "error",
         "Stop": "done",
+        "StopFailure": "error",
+        "StopCancelled": "done",
     }.get(event_name)
 
 

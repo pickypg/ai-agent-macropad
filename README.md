@@ -42,12 +42,13 @@ The pad's hardware, HID protocol, and daemon core don't assume any
 particular agent — but wiring one up still means writing the piece
 that turns its own event stream into hook payloads on
 `~/.ai-agent-macropad/daemon.sock` (see [Protocol](#protocol) below).
-Two agents have that piece written so far:
+Three agents have that piece written so far:
 
 | Agent                                          | Status     | Notes                                                                                 |
 | ----------------------------------------------- | ---------- | -------------------------------------------------------------------------------------- |
 | [Claude Code](https://claude.com/claude-code)   | ✅ Tested  | Wired via Claude Code's own hooks — see [`claude/example_hook_settings.json`](claude/example_hook_settings.json) and [`claude/hook.sh`](claude/hook.sh) |
 | [Codex CLI](https://developers.openai.com/codex) | ✅ Tested | Wired via Codex's own hooks (near-identical event vocabulary to Claude Code's) — see [`codex/example_hooks.json`](codex/example_hooks.json) and [`codex/hook.sh`](codex/hook.sh). Verified end to end with a real `codex exec` run; see [Wire up Codex hooks](#wire-up-codex-hooks) for the two gaps versus Claude Code (no `PostToolUseFailure` or `Notification` equivalent) |
+| [Grok Build](https://docs.x.ai/build) (xAI)     | ✅ Tested | Wired via Grok Build's own hooks — its payloads use a different shape (camelCase fields, snake_case event-name values) that [`grok/hook.sh`](grok/hook.sh) translates before forwarding; see [`grok/example_hooks.json`](grok/example_hooks.json). Verified end to end with a real `grok -p ...` run. Actually has *more* of Claude Code's event vocabulary than Codex (its own `StopFailure`/`StopCancelled`, and a reliable `Notification:permission_prompt`) but shares Codex's `PostToolUseFailure` gap in practice; see [Wire up Grok Build hooks](#wire-up-grok-build-hooks) |
 
 Update this table as support for other agents is added.
 
@@ -62,10 +63,10 @@ Each slot's RGB color reflects that session's current state, per
 | 🔵  | thinking     | blue `#0000FF`              | `working`      | The agent is reasoning between tool calls (`UserPromptSubmit`, `PostToolUse`)                                 |
 | 🟣  | tool running | purple `#8000FF`            | `tool_running` | A tool call is actively executing (`PreToolUse`)                                                              |
 | 🟢  | complete     | green `#00FF00`            | `done`         | `Stop` — the agent finished responding                                                                        |
-| 🟠  | needs input  | orange `#FF7F00`, blinking | `question`     | Blocked on you: `AskUserQuestion`, `ExitPlanMode`, `PermissionRequest`, or `Notification:agent_needs_input`   |
+| 🟠  | needs input  | orange `#FF7F00`, blinking | `question`     | Blocked on you: `AskUserQuestion`, `ExitPlanMode`, `PermissionRequest`, `Notification:agent_needs_input`, or `Notification:permission_prompt` (Grok Build) |
 | 🟣  | tool stalled | purple `#8000FF`, blinking | `tool_stalled` | A tool call has been pending past `STALL_THRESHOLD_SECONDS` with no `PostToolUse` — may or may not be blocked |
-| 🟡  | waiting      | amber `#FFAA00`             | `waiting`      | Claude Code's been idle 60s+ with nothing blocking (`Notification:idle_prompt`) — lower urgency than "needs input"; Claude-Code-only, see [Agents tested](#agents-tested) |
-| 🔴  | error        | red `#FF0000`              | `error`        | `PostToolUseFailure` — Claude-Code-only; Codex has no equivalent, see [Agents tested](#agents-tested)          |
+| 🟡  | waiting      | amber `#FFAA00`             | `waiting`      | The agent's been idle 60s+ with nothing blocking (`Notification:idle_prompt`) — lower urgency than "needs input"; Claude Code and Grok Build only, see [Agents tested](#agents-tested) |
+| 🔴  | error        | red `#FF0000`              | `error`        | `PostToolUseFailure` (Claude Code, Grok Build) or `StopFailure` (Grok Build only — a turn ending on an API error). In practice, an ordinary tool failure rarely triggers `PostToolUseFailure` for Grok Build, same gap as Codex — see [Agents tested](#agents-tested) |
 
 "needs input" and "tool stalled" blink (0.5s on/off) so each reads as
 distinct from its solid-color sibling at a glance — "needs input" from
@@ -105,13 +106,15 @@ been tried.
 | `claude/hook.sh`                    | Reads a Claude Code hook payload from stdin, enriches it, tags it `agent: claude-code`, and forwards it to the daemon's socket |
 | `codex/example_hooks.json`          | `hooks` block for Codex CLI's `hooks.json`/`config.toml`, wiring every relevant event to `hook.sh`         |
 | `codex/hook.sh`                     | Same idea as `claude/hook.sh`, for Codex's own (near-identical) hook payload shape — tags it `agent: codex` |
+| `grok/example_hooks.json`           | Hook file for Grok Build's `~/.grok/hooks/` directory, wiring every relevant event to `hook.sh`            |
+| `grok/hook.sh`                      | Translates Grok Build's own (camelCase, snake_case-valued) hook payload shape into this repo's wire format — tags it `agent: grok-build` |
 
 ## How it fits together
 
 ```
 Claude Code hooks --> claude/hook.sh --\
-                                         >-   daemon.py    <-- USB HID --> QMK keyboard
-       Codex hooks --> codex/hook.sh --/    (Unix socket)
+       Codex hooks --> codex/hook.sh -----> daemon.py    <-- USB HID --> QMK keyboard
+   Grok Build hooks --> grok/hook.sh --/   (Unix socket)
 ```
 
 `daemon.py` listens on a Unix domain socket at `~/.ai-agent-macropad/daemon.sock`
@@ -476,6 +479,92 @@ state never fires for a Codex session — only Claude Code has an
 equivalent. Everything else, including `PermissionRequest` -> `question`,
 works the same as Claude Code.
 
+#### Wire up Grok Build hooks
+
+Grok Build's own hooks system (documented at
+[docs.x.ai/build](https://docs.x.ai/build/features/hooks)) discovers
+hooks from `~/.grok/hooks/*.json` directly — no merging into an
+existing config file needed, and global hooks there are always
+trusted, no per-project trust prompt to deal with (unlike Codex).
+Its hook *payloads*, however, diverge from Claude Code's and Codex's
+more than either of those diverge from each other: every field is
+camelCase (`hookEventName`, `sessionId`, `toolName`, ...), and —
+confirmed against a real `grok -p ...` run, contradicting what Grok
+Build's own docs imply — `hookEventName`'s *value* is snake_case
+(`"pre_tool_use"`, `"post_tool_use"`, `"stop"`, ...) rather than the
+PascalCase (`"PreToolUse"`, ...) its hooks reference uses for
+hook-file matching. [`grok/hook.sh`](grok/hook.sh) translates both the
+field names and the event-name values before forwarding — see its own
+comments for the full list of what it translates and why.
+
+1. Copy the script and make it executable:
+
+   ```
+   cp grok/hook.sh "$HOME/.ai-agent-macropad/hook-grok.sh"
+   chmod +x "$HOME/.ai-agent-macropad/hook-grok.sh"
+   ```
+
+2. Copy [`grok/example_hooks.json`](grok/example_hooks.json) into
+   Grok Build's own global hooks directory:
+
+   ```
+   mkdir -p "$HOME/.grok/hooks"
+   cp grok/example_hooks.json "$HOME/.grok/hooks/ai-agent-macropad.json"
+   ```
+
+   It wires every event `handle_hook_event()` cares about
+   (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
+   `PostToolUseFailure`, `PermissionDenied`, `Notification`, `Stop`,
+   `StopFailure`, `StopCancelled`, `SubagentStart`, `SubagentStop`,
+   `PreCompact`, `PostCompact`, `SessionEnd`) to
+   `$HOME/.ai-agent-macropad/hook-grok.sh` — several of these
+   (`PermissionDenied`, the `Subagent*`/`*Compact` pair) currently map
+   to no state change, wired up anyway so a future `hook_to_state()`
+   change doesn't also require re-editing this file, same reasoning as
+   Claude Code's own `SubagentStop` entry.
+
+3. Reload hooks in any already-running Grok Build session (`r` in the
+   Hooks tab, opened via `Ctrl+L` or `/hooks`), or just start a new one
+   — no restart or trust step needed for a global hook.
+
+Grok Build also reads `~/.claude/settings.json` by default, for
+compatibility with Claude Code's own hook files (see its [Hooks
+docs](https://docs.x.ai/build/features/hooks#hook-locations)) — so if
+you already have `claude/hook.sh` wired up on this machine (step
+above), a Grok Build session will *also* invoke it for every event,
+confirmed live. This is harmless — `claude/hook.sh` only recognizes
+Claude Code's own snake_case field names, so it forwards a payload
+missing `session_id`, which `daemon.py` silently drops (`DROPPED
+reason=no_session_id` in `events.log`) — but it's an extra process
+spawned per event for no benefit. To stop it, add to
+`~/.grok/config.toml`:
+
+```toml
+[compat.claude]
+hooks = false
+```
+
+Gaps versus Claude Code, confirmed live during development (see
+`hook_to_state`'s docstring in `daemon.py` for the full reasoning):
+
+- Grok Build's docs list `PostToolUseFailure` as a distinct event, but
+  in practice — tried both a nonzero shell exit code and a
+  nonexistent-file read — an ordinary tool failure still comes back as
+  a plain `PostToolUse` (state stays `working`, never `error`), the
+  same practical gap as Codex. It's still translated and mapped to
+  `error` in case a genuine infra-level failure does use it.
+- `PermissionDenied` (Grok Build's rule-based auto-deny, e.g. via
+  `--deny`) fires *after* the decision is already made, with nothing
+  left pending — it deliberately maps to no state change, unlike
+  Claude Code/Codex's `PermissionRequest`. The actual "a permission UI
+  is waiting on you" signal for Grok Build is
+  `Notification:permission_prompt`, confirmed live and — per Grok
+  Build's own docs — reliable, unlike Claude Code's version of that
+  same subtype (see [Pad states](#pad-states)).
+- `StopFailure` and `StopCancelled` have no Claude Code/Codex
+  equivalent (mapped to `error` and `done` respectively) — see
+  [Pad states](#pad-states).
+
 ## Testing
 
 ```
@@ -520,6 +609,12 @@ stands in for it):
   guessed) are exercised in `tests/test_codex_hook_mapping.py`, mostly
   as regression insurance that `hook_to_state()` stays agent-agnostic
   rather than re-testing mapping rules already covered elsewhere.
+- Grok Build-shaped hook payloads, i.e. already translated by
+  `grok/hook.sh` into this repo's wire format (real field/event names
+  and values — `tool_name: "run_terminal_command"`,
+  `notification_type: "permission_prompt"`, `StopFailure`,
+  `StopCancelled`, ... — confirmed live, not guessed) are exercised in
+  `tests/test_grok_hook_mapping.py`.
 
 ## Protocol
 
@@ -535,10 +630,10 @@ together](#how-it-fits-together)). Recognized fields:
 | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `hook_event_name`   | Selects the resulting pad state (see below)                                                                      |
 | `session_id`        | Identifies which pad slot this event belongs to                                                                  |
-| `agent`             | Which agent sent this (`"claude-code"`, `"codex"`) — bookkeeping/logging only, doesn't affect state mapping; defaults to `"claude-code"` if absent |
+| `agent`             | Which agent sent this (`"claude-code"`, `"codex"`, `"grok-build"`) — bookkeeping/logging only, doesn't affect state mapping; defaults to `"claude-code"` if absent |
 | `cwd`               | Project folder name — used for VS Code/IntelliJ window-dispatch matching (QMK pads are RGB-only, no on-device label) |
 | `tool_name`         | Distinguishes attention-worthy tools (`AskUserQuestion`, `ExitPlanMode`) and labels the slot during `PreToolUse` |
-| `notification_type` | Distinguishes `Notification` subtypes (`agent_needs_input`, `idle_prompt`, ...) — Claude-Code-only, see [Agents tested](#agents-tested) |
+| `notification_type` | Distinguishes `Notification` subtypes (`agent_needs_input`, `idle_prompt`, `permission_prompt`, ...) — Claude Code and Grok Build only, see [Agents tested](#agents-tested) |
 | `tmux_pane`         | tmux pane id, for the "bring to front" key-press dispatch                                                        |
 | `controlling_tty`   | Terminal.app tty, for the same dispatch when not in tmux                                                         |
 
@@ -549,33 +644,44 @@ together](#how-it-fits-together)). Recognized fields:
 | `SessionStart`                                                             | `idle`         |
 | `UserPromptSubmit`, `PostToolUse`                                          | `working`      |
 | `PreToolUse` (generic tool)                                                | `tool_running` |
-| `PreToolUse` with `AskUserQuestion`/`ExitPlanMode` (Claude-Code-only), or `PermissionRequest` | `question` |
-| `PostToolUseFailure` (Claude-Code-only — no Codex equivalent)              | `error`        |
-| `Stop`                                                                     | `done`         |
-| `Notification` (`agent_needs_input`) — Claude-Code-only                    | `question`     |
-| `Notification` (`idle_prompt`) — Claude-Code-only                          | `waiting`      |
+| `PreToolUse` with `AskUserQuestion`/`ExitPlanMode` (Claude Code only), or `PermissionRequest` | `question` |
+| `PostToolUseFailure` (rarely fires in practice for Codex or Grok Build)    | `error`        |
+| `StopFailure` (Grok Build only — a turn ending on an API error)           | `error`        |
+| `Stop`, `StopCancelled` (Grok Build only)                                  | `done`         |
+| `Notification` (`agent_needs_input`, Claude Code; `permission_prompt`, Grok Build) | `question` |
+| `Notification` (`idle_prompt`) — Claude Code and Grok Build only          | `waiting`      |
 | `SessionEnd`                                                               | slot cleared   |
 
-Claude Code and Codex CLI send this same `hook_event_name` vocabulary
-(confirmed against both agents' own hooks references, and — for
-Codex — against real hook payloads captured from a live `codex exec`
-run), so `hook_to_state()` in `daemon.py` is shared rather than forked
-per agent. The rows marked Claude-Code-only above are the only places
-they diverge; every other row applies to both agents identically.
+Claude Code, Codex CLI, and Grok Build send mostly the same
+`hook_event_name` vocabulary — Claude Code's and Codex's overlap
+almost entirely (confirmed against both agents' own hooks references,
+and — for Codex — against real hook payloads captured from a live
+`codex exec` run); Grok Build's overlaps too, plus a few events
+neither of the other two sends (`StopFailure`, `StopCancelled`),
+though it arrives in a different shape on the wire (camelCase fields,
+snake_case event-name values) that `grok/hook.sh` translates before
+forwarding — see its own comments, and [Wire up Grok Build
+hooks](#wire-up-grok-build-hooks) for what was confirmed live versus
+what its own docs claim. `hook_to_state()` in `daemon.py` is one
+shared mapping table across all three rather than forked per agent;
+the rows marked agent-specific above are the places they diverge —
+every other row applies to all three identically.
 
 A `PreToolUse` with no matching `PostToolUse`/`PostToolUseFailure` within
 `STALL_THRESHOLD_SECONDS` (default 10s) is escalated to `tool_stalled`
 (blinking purple) as a backstop, since `Notification:permission_prompt`
-isn't reliable enough to depend on alone. This deliberately stops short
-of claiming `question` (definitely blocked on you) — the daemon can't
-actually tell whether a stalled tool call is an unreported permission
-prompt or just a slow tool, so `tool_stalled` only claims "this is
-taking a while." If a definite `question` signal (`PermissionRequest`,
-`Notification:agent_needs_input`) does arrive for that same pending
-call, the stall tracking for it is dropped — the slot's already showing
-a stronger, more specific state than a guess, and shouldn't get
-clobbered back to `tool_stalled` once the threshold elapses from the
-original `PreToolUse`.
+isn't reliable enough to depend on alone for Claude Code (Grok Build's
+version of that same subtype is trusted directly — see [Agents
+tested](#agents-tested)). This deliberately stops short of claiming
+`question` (definitely blocked on you) — the daemon can't actually tell
+whether a stalled tool call is an unreported permission prompt or just
+a slow tool, so `tool_stalled` only claims "this is taking a while." If
+a definite `question` signal (`PermissionRequest`,
+`Notification:agent_needs_input`, `Notification:permission_prompt`)
+does arrive for that same pending call, the stall tracking for it is
+dropped — the slot's already showing a stronger, more specific state
+than a guess, and shouldn't get clobbered back to `tool_stalled` once
+the threshold elapses from the original `PreToolUse`.
 
 Slots are allocated first-fit and freed on `SessionEnd`. The number of
 slots comes from the pad's own `hello` handshake at startup (whatever
