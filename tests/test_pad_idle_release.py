@@ -13,6 +13,7 @@ class FakePad:
         self.attached = attached
         self.open_calls = 0
         self.close_calls = 0
+        self.written = []
 
     def open(self):
         self.open_calls += 1
@@ -21,6 +22,9 @@ class FakePad:
     def close(self):
         self.close_calls += 1
         self.attached = False
+
+    def write_json(self, msg):
+        self.written.append(msg)
 
 
 def test_reconcile_opens_pad_when_a_session_is_active():
@@ -86,6 +90,49 @@ def test_kick_reconcile_is_a_noop_outside_a_running_event_loop():
     d._kick_reconcile()  # no running loop here
 
     assert d.pad.open_calls == 0
+
+
+def test_reconcile_resyncs_cached_slot_state_when_reopening():
+    """Reproduces the real-world race: a SessionStart's own _send_pad()
+    call runs synchronously before its _kick_reconcile() task actually
+    gets to open the pad (see the note in _reconcile_pad's docstring),
+    so that write lands on a still-closed transport and is dropped.
+    Without an explicit resync right after open() succeeds, that
+    session's slot would never reach the pad until its next hook event.
+    """
+    d = daemon.Daemon()
+    d.pad = FakePad(attached=False)
+    # Stand in for the dropped write: allocate + cache state as
+    # SessionStart would, without a transport open to actually receive
+    # it (mirrors _send_pad()'s behavior when self.pad.write_json() is
+    # a no-op because the device isn't attached yet).
+    d.slots.allocate("s1")
+    d.pad_state[0] = {"t": "slot", "i": 0, "state": "idle", "label": "s1"}
+
+    asyncio.run(d._reconcile_pad())
+
+    assert d.pad.attached is True
+    assert d.pad.written == [{"t": "slot", "i": 0, "state": "idle", "label": "s1"}]
+
+
+def test_reconcile_does_not_resync_when_pad_fails_to_attach():
+    """open() found no pad — nothing changed, so resyncing (and logging
+    that it did) would be misleading; there's nothing to resync onto.
+    """
+    class FailingPad(FakePad):
+        def open(self):
+            self.open_calls += 1
+            # stays unattached — simulates no hardware answering
+
+    d = daemon.Daemon()
+    d.pad = FailingPad(attached=False)
+    d.pad_state[0] = {"t": "slot", "i": 0, "state": "idle", "label": "s1"}
+    d.slots.allocate("s1")
+
+    asyncio.run(d._reconcile_pad())
+
+    assert d.pad.attached is False
+    assert d.pad.written == []
 
 
 def test_kick_reconcile_opens_pad_inside_a_running_event_loop():

@@ -407,6 +407,19 @@ class Daemon:
         so both run off the event loop via asyncio.to_thread — this
         coroutine is only ever invoked as a background task (see
         _kick_reconcile()), never awaited inline from hook handling.
+
+        A reopen here is only ever a *deliberate* one (the session that
+        prompted it is why want_open flipped true) — unlike
+        HidPadLink's own _reconnect() after a dropped HID handle, open()
+        doesn't call on_reattach() itself (see its docstring in
+        pad_link.py), so resync_pad() is called explicitly right after,
+        to replay whatever _send_pad() already cached. That matters
+        because the very SessionStart that triggered this reopen has
+        already called _send_pad() for its own slot by the time this
+        coroutine actually gets to run open() — that write landed while
+        self.pad._dev was still None and was silently dropped (see
+        HidPadLink.write_json), so without this resync that session's
+        first slot state would never reach the pad at all.
         """
         if delay:
             await asyncio.sleep(delay)
@@ -414,6 +427,8 @@ class Daemon:
             want_open = len(self.slots.session_to_slot) > 0
             if want_open and not self.pad.attached:
                 await asyncio.to_thread(self.pad.open)
+                if self.pad.attached:
+                    self.resync_pad()
             elif not want_open and self.pad.attached:
                 await asyncio.to_thread(self.pad.close)
 
