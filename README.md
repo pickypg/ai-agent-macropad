@@ -537,12 +537,14 @@ compatibility with Claude Code's own hook files (see its [Hooks
 docs](https://docs.x.ai/build/features/hooks#hook-locations)) — so if
 you already have `claude/hook.sh` wired up on this machine (step
 above), a Grok Build session will *also* invoke it for every event,
-confirmed live. This is harmless — `claude/hook.sh` only recognizes
-Claude Code's own snake_case field names, so it forwards a payload
-missing `session_id`, which `daemon.py` silently drops (`DROPPED
-reason=no_session_id` in `events.log`) — but it's an extra process
-spawned per event for no benefit. To stop it, add to
-`~/.grok/config.toml`:
+confirmed live, passing Grok's own camelCase envelope
+(`hookEventName`/`sessionId`, not Claude Code's snake_case). Since
+`claude/hook.sh` requires *both* `hook_event_name` and `session_id` to
+be present before it forwards anything — every genuine Claude Code
+event includes both — it recognizes a Grok-shaped payload as foreign
+and drops it immediately, without ever touching the daemon's socket
+or the daemon's logs. It's still an extra process spawned per event
+for no benefit, though. To stop that, add to `~/.grok/config.toml`:
 
 ```toml
 [compat.claude]

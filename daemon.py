@@ -619,7 +619,8 @@ class Daemon:
             i = msg.get("i")
             valid_index = i is not None and i < self.slots.num_slots
             session_id = self.slots.slot_to_session[i] if valid_index else None
-            log.info("key %s -> session %s", i, session_id)
+            agent = self.session_agents.get(session_id, "<unknown>")
+            log.info("key %s -> session %s (agent=%s)", i, session_id, agent)
             if session_id is None:
                 events_log.info("DISPATCH key=%s result=no_session", i)
                 if valid_index:

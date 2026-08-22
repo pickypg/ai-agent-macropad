@@ -48,11 +48,27 @@
 # PreToolUse/PostToolUse fire on every single tool use, so this also
 # needs to stay fast — nc's -w1 caps the connection attempt at 1s, and
 # the ps call above is skipped entirely except at SessionStart.
-
+#
+# Guard against foreign payloads: some agents (confirmed with Grok
+# Build) also load ~/.claude/settings.json for "Claude Code
+# compatibility" and fire this hook with their OWN native envelope
+# instead of Claude Code's — e.g. Grok Build's is camelCase
+# (hookEventName/sessionId), not this script's expected
+# hook_event_name/session_id. Forwarding that untranslated payload
+# would reach daemon.py missing session_id, get logged as a dropped
+# event, and get mislabeled agent=claude-code (this script hardcodes
+# that below) even though it's really from the other agent. Since
+# Claude Code itself always includes both fields, their absence means
+# this isn't really a Claude Code event — drop it instead of
+# forwarding garbage.
 SOCKET="$HOME/.ai-agent-macropad/daemon.sock"
 
 input=$(cat)
 event=$(printf '%s' "$input" | jq -r '.hook_event_name // empty')
+session_id=$(printf '%s' "$input" | jq -r '.session_id // empty')
+if [ -z "$event" ] || [ -z "$session_id" ]; then
+  exit 0
+fi
 
 ctty=""
 if [ "$event" = "SessionStart" ]; then
