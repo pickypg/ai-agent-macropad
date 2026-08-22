@@ -1,12 +1,12 @@
-// NuPhy Air75 V2 keymap — Claude Code session-status pad.
+// NuPhy Air75 V2 keymap — AI agent session-status pad.
 //
 // Ships 4 physical keys wired by default (PageUp/PageDn/Home/End —
 // the board's right-edge nav column; a small cluster to bring up and
 // verify against real hardware before committing to a bigger one) as
-// AI_AGENT_KEY_0..3, each showing one Claude Code session's state via
+// AI_AGENT_KEY_0..3, each showing one AI agent session's state via
 // per-key RGB. AI_AGENT_KEY_4..11 exist as valid keycodes but aren't
 // wired to any physical key here — VIA_ENABLE lets an end user drag
-// them onto spare keys themselves (see claude_macropad.c's dynamic
+// them onto spare keys themselves (see ai_agent_macropad.c's dynamic
 // slot/LED discovery, which picks up wherever they end up), though
 // only AI_AGENT_KEY_4..7 are actually reachable from VIA's picker UI
 // today (via.json in this same directory names them "AI Slot 4".."AI
@@ -19,10 +19,10 @@
 // process_record_user() code doesn't care about JSON at all) — they're
 // just not currently nameable in VIA's UI, a JSON budget problem, not
 // a firmware one. Protocol/state logic (shared across every board's
-// keymap) lives in users/claude_macropad/claude_macropad.c; this file
+// keymap) lives in users/ai_agent_macropad/ai_agent_macropad.c; this file
 // holds only what's specific to this board.
 #include QMK_KEYBOARD_H
-#include "claude_macropad.h"
+#include "ai_agent_macropad.h"
 
 // Indices must land at 0/2 for MAC_BASE/WIN_BASE — board-level ansi.c
 // (nuphy-qmk-firmware, not this keymap) drives the physical MAC/WIN
@@ -56,9 +56,9 @@ enum layers {
 // recognizing the keyboard entirely, not just reject the JSON. Also
 // can't reuse the tag name "custom_keycodes" itself — ansi.h's enum
 // already claims it, and C enum tags collide independently of the
-// value range chosen. claude_macropad_keycodes is specific enough to
+// value range chosen. ai_agent_macropad_keycodes is specific enough to
 // this keymap that it won't run into the same problem again.
-enum claude_macropad_keycodes {
+enum ai_agent_macropad_keycodes {
     AI_AGENT_KEY_0 = QK_KB_0 + 24,  // PageUp position (default)
     AI_AGENT_KEY_1,               // PageDn position (default)
     AI_AGENT_KEY_2,               // Home position (default)
@@ -73,7 +73,7 @@ enum claude_macropad_keycodes {
     AI_AGENT_KEY_11,              // unwired by default — valid keycode, but not in via.json's picker (32-entry cap)
 };
 
-#define NUM_MACROPAD_SLOTS CLAUDE_MACROPAD_MAX_SLOTS
+#define NUM_MACROPAD_SLOTS AI_AGENT_MACROPAD_MAX_SLOTS
 #define DEVICE_ID_AIR75_V2 0xA7
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
@@ -131,18 +131,18 @@ static const uint8_t slot_to_led[NUM_MACROPAD_SLOTS] = {16, 45, 46, 73, NO_LED, 
 void keyboard_post_init_user(void) {
 #ifdef VIA_ENABLE
     // NULL: a static table can't know where the user's put each key —
-    // claude_macropad_scan_slots() (safe here; via_init() already ran
+    // ai_agent_macropad_scan_slots() (safe here; via_init() already ran
     // and loaded the dynamic keymap EEPROM by this point in QMK's boot
     // sequence) builds the real one from the live keymap instead.
-    claude_macropad_init(NUM_MACROPAD_SLOTS, NULL);
-    claude_macropad_scan_slots(AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
+    ai_agent_macropad_init(NUM_MACROPAD_SLOTS, NULL);
+    ai_agent_macropad_scan_slots(AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
 #else
-    claude_macropad_init(NUM_MACROPAD_SLOTS, slot_to_led);
+    ai_agent_macropad_init(NUM_MACROPAD_SLOTS, slot_to_led);
 #endif
 }
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-    return claude_macropad_process_record(keycode, record, AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
+    return ai_agent_macropad_process_record(keycode, record, AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
 }
 
 // VIA_ENABLE boards route raw HID through via_command_kb() instead of
@@ -150,24 +150,24 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 // VIA_ENABLE=yes, so defining it here too would be a duplicate-symbol
 // link error. via_command_kb() runs first and, per its contract, a
 // `true` return (our message types all live outside VIA's reserved
-// command-id range — see claude_macropad.h) fully claims the report
+// command-id range — see ai_agent_macropad.h) fully claims the report
 // before VIA's own dispatch ever sees it.
 #ifdef VIA_ENABLE
 bool via_command_kb(uint8_t *data, uint8_t length) {
     // Peek only — never claims VIA's own commands (set_keycode/reset),
     // just keeps our slot -> LED table in sync with them. Order versus
-    // the claude_macropad_raw_hid_receive() call below doesn't matter,
+    // the ai_agent_macropad_raw_hid_receive() call below doesn't matter,
     // they act on disjoint command-id ranges.
-    claude_macropad_track_via_remap(data, length, AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
-    return claude_macropad_raw_hid_receive(data, length, DEVICE_ID_AIR75_V2, NUM_MACROPAD_SLOTS);
+    ai_agent_macropad_track_via_remap(data, length, AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
+    return ai_agent_macropad_raw_hid_receive(data, length, DEVICE_ID_AIR75_V2, NUM_MACROPAD_SLOTS);
 }
 #else
 void raw_hid_receive(uint8_t *data, uint8_t length) {
-    claude_macropad_raw_hid_receive(data, length, DEVICE_ID_AIR75_V2, NUM_MACROPAD_SLOTS);
+    ai_agent_macropad_raw_hid_receive(data, length, DEVICE_ID_AIR75_V2, NUM_MACROPAD_SLOTS);
 }
 #endif
 
 bool rgb_matrix_indicators_user(void) {
-    claude_macropad_paint_indicators(NUM_MACROPAD_SLOTS);
+    ai_agent_macropad_paint_indicators(NUM_MACROPAD_SLOTS);
     return true;
 }

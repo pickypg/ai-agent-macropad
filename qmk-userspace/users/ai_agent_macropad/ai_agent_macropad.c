@@ -1,4 +1,4 @@
-#include "claude_macropad.h"
+#include "ai_agent_macropad.h"
 #include "raw_hid.h"
 #include "rgb_matrix.h"
 
@@ -8,17 +8,17 @@
 #    include "keymap_introspection.h"
 #endif
 
-static uint8_t slot_states[CLAUDE_MACROPAD_MAX_SLOTS];
+static uint8_t slot_states[AI_AGENT_MACROPAD_MAX_SLOTS];
 
 // slot index -> RGB matrix LED index; NO_LED (quantum/rgb_matrix) means
 // no key is currently assigned to that slot. Static tables (non-VIA
 // boards) and the VIA dynamic-keymap scan both funnel into this same
-// array, so claude_macropad_paint_indicators() never needs to care
+// array, so ai_agent_macropad_paint_indicators() never needs to care
 // which one populated it.
-static uint8_t slot_led[CLAUDE_MACROPAD_MAX_SLOTS];
+static uint8_t slot_led[AI_AGENT_MACROPAD_MAX_SLOTS];
 
-void claude_macropad_init(uint8_t num_slots, const uint8_t *slot_to_led) {
-    for (uint8_t i = 0; i < num_slots && i < CLAUDE_MACROPAD_MAX_SLOTS; i++) {
+void ai_agent_macropad_init(uint8_t num_slots, const uint8_t *slot_to_led) {
+    for (uint8_t i = 0; i < num_slots && i < AI_AGENT_MACROPAD_MAX_SLOTS; i++) {
         slot_states[i] = STATE_OFF;
         slot_led[i]    = slot_to_led ? slot_to_led[i] : NO_LED;
     }
@@ -32,21 +32,21 @@ void claude_macropad_init(uint8_t num_slots, const uint8_t *slot_to_led) {
 // lookup needed, since an LED index can only ever back one slot at a
 // time.
 static void set_slot_led_for_keycode(uint16_t slot_key_base, uint8_t num_slots, uint8_t led, uint16_t keycode) {
-    for (uint8_t i = 0; i < num_slots && i < CLAUDE_MACROPAD_MAX_SLOTS; i++) {
+    for (uint8_t i = 0; i < num_slots && i < AI_AGENT_MACROPAD_MAX_SLOTS; i++) {
         if (slot_led[i] == led) {
             slot_led[i] = NO_LED;
         }
     }
     if (keycode >= slot_key_base && keycode < (uint16_t)(slot_key_base + num_slots)) {
         uint8_t index = keycode - slot_key_base;
-        if (index < CLAUDE_MACROPAD_MAX_SLOTS) {
+        if (index < AI_AGENT_MACROPAD_MAX_SLOTS) {
             slot_led[index] = led;
         }
     }
 }
 
 static void rescan_slots(uint16_t slot_key_base, uint8_t num_slots, bool from_static_layer) {
-    for (uint8_t i = 0; i < num_slots && i < CLAUDE_MACROPAD_MAX_SLOTS; i++) {
+    for (uint8_t i = 0; i < num_slots && i < AI_AGENT_MACROPAD_MAX_SLOTS; i++) {
         slot_led[i] = NO_LED;
     }
     for (uint8_t row = 0; row < MATRIX_ROWS; row++) {
@@ -57,11 +57,11 @@ static void rescan_slots(uint16_t slot_key_base, uint8_t num_slots, bool from_st
     }
 }
 
-void claude_macropad_scan_slots(uint16_t slot_key_base, uint8_t num_slots) {
+void ai_agent_macropad_scan_slots(uint16_t slot_key_base, uint8_t num_slots) {
     rescan_slots(slot_key_base, num_slots, false);
 }
 
-void claude_macropad_track_via_remap(uint8_t *data, uint8_t length, uint16_t slot_key_base, uint8_t num_slots) {
+void ai_agent_macropad_track_via_remap(uint8_t *data, uint8_t length, uint16_t slot_key_base, uint8_t num_slots) {
     if (length < 1) return;
 
     switch (data[0]) {
@@ -91,7 +91,7 @@ void claude_macropad_track_via_remap(uint8_t *data, uint8_t length, uint16_t slo
 }
 #endif
 
-bool claude_macropad_process_record(uint16_t keycode, keyrecord_t *record, uint16_t slot_key_base, uint8_t num_slots) {
+bool ai_agent_macropad_process_record(uint16_t keycode, keyrecord_t *record, uint16_t slot_key_base, uint8_t num_slots) {
     if (keycode < slot_key_base || keycode >= (uint16_t)(slot_key_base + num_slots)) {
         return true;
     }
@@ -101,7 +101,7 @@ bool claude_macropad_process_record(uint16_t keycode, keyrecord_t *record, uint1
     // slot_key_base, valid since the keymap's AI_AGENT_KEY_* enum
     // values are sequential starting there.
     if (record->event.pressed) {
-        uint8_t report[CLAUDE_MACROPAD_REPORT_SIZE] = {0};
+        uint8_t report[AI_AGENT_MACROPAD_REPORT_SIZE] = {0};
         report[0] = MSG_KEY;
         report[1] = keycode - slot_key_base;
         raw_hid_send(report, sizeof(report));
@@ -113,12 +113,12 @@ bool claude_macropad_process_record(uint16_t keycode, keyrecord_t *record, uint1
 // discover_hid_device()/handshake() handshake); MSG_SLOT updates one
 // slot's displayed state. Returns whether `data[0]` was one of ours
 // (see header for why this matters on VIA_ENABLE boards).
-bool claude_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t device_id, uint8_t num_slots) {
+bool ai_agent_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t device_id, uint8_t num_slots) {
     if (length < 1) return false;
 
     switch (data[0]) {
         case MSG_PING: {
-            uint8_t response[CLAUDE_MACROPAD_REPORT_SIZE] = {0};
+            uint8_t response[AI_AGENT_MACROPAD_REPORT_SIZE] = {0};
             response[0] = MSG_HELLO;
             response[1] = device_id;
             response[2] = num_slots;
@@ -137,7 +137,7 @@ bool claude_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t devi
             // state_to_rgb() is what decides whether a given value is
             // actually a known case or falls through to the "unknown"
             // fallback color.
-            if (index < num_slots && index < CLAUDE_MACROPAD_MAX_SLOTS && state <= STATE_OFF) {
+            if (index < num_slots && index < AI_AGENT_MACROPAD_MAX_SLOTS && state <= STATE_OFF) {
                 slot_states[index] = state;
             }
             return true;
@@ -173,7 +173,7 @@ static void state_to_rgb(uint8_t state, uint8_t *r, uint8_t *g, uint8_t *b) {
 // BLINK_STATES/BLINK_PERIOD (500ms on/off) — derived from the
 // free-running frame timer rather than tracked state, since this runs
 // every RGB matrix tick already.
-void claude_macropad_paint_indicators(uint8_t num_slots) {
+void ai_agent_macropad_paint_indicators(uint8_t num_slots) {
     bool blink_on = (timer_read32() / 500) % 2 == 0;
 
     // rgb_matrix_set_color() writes the LED buffer directly, bypassing
@@ -182,7 +182,7 @@ void claude_macropad_paint_indicators(uint8_t num_slots) {
     // on the status indicators.
     uint8_t val = rgb_matrix_get_val();
 
-    for (uint8_t i = 0; i < num_slots && i < CLAUDE_MACROPAD_MAX_SLOTS; i++) {
+    for (uint8_t i = 0; i < num_slots && i < AI_AGENT_MACROPAD_MAX_SLOTS; i++) {
         if (slot_led[i] == NO_LED) continue;  // no key currently assigned to this slot
 
         uint8_t state = slot_states[i];

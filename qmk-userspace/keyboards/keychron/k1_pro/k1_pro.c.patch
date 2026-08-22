@@ -11,8 +11,8 @@ index e67642cb3a..7f86ca8901 100644
 +// that wants to handle raw HID command IDs this board doesn't already
 +// claim (0xAA/0xAB above) can define its own strong raw_hid_receive_kb()
 +// to override this weak one — same override convention QMK itself uses
-+// for via_command_kb() one level up. Added for claude-macropad; see
-+// https://github.com/pickypg/claude-macropad's Keychron K1 Pro section.
++// for via_command_kb() one level up. Added for ai-agent-macropad; see
++// https://github.com/pickypg/ai-agent-macropad's Keychron K1 Pro section.
 +// Tracked upstream at https://github.com/Keychron/qmk_firmware/pull/506 —
 +// if merged, this patch (and applying it by hand) becomes unnecessary.
 +__attribute__((weak)) bool raw_hid_receive_kb(uint8_t *data, uint8_t length) {

@@ -1,10 +1,12 @@
-# claude-macropad
+# ai-agent-macropad
 
-A daemon that mirrors the state of your Claude Code sessions onto a
-physical keyboard — one key/LED slot per active session, color-coded
+A daemon that mirrors the state of your AI coding agent sessions onto
+a physical keyboard — one key/LED slot per active session, color-coded
 by what that session is doing (working, waiting on you, done, errored,
 etc.) — pressing a key brings that session's window (Terminal, VS
-Code, or IntelliJ) to the front.
+Code, or IntelliJ) to the front. The hardware, wire protocol, and
+daemon core are agent-agnostic; see [Agents tested](#agents-tested)
+below for which coding agents are actually wired up today.
 
 Any RGB QMK keyboard works over USB HID — proven on a [NuPhy Air75
 V2](https://nuphy.com/products/air75-v2). Porting to another QMK board
@@ -32,6 +34,20 @@ ends — see [Run the daemon](#2-run-the-daemon) — so the [VIA
 app](https://www.caniusevia.com/), which needs exclusive access to
 that same interface, can be used without manually stopping the daemon
 first.
+
+## Agents tested
+
+The pad's hardware, HID protocol, and daemon core don't assume any
+particular agent — but wiring one up still means writing the piece
+that turns its own event stream into hook payloads on
+`~/.claude-macropad/daemon.sock` (see [Protocol](#protocol) below).
+Only one agent has that piece written so far:
+
+| Agent                                          | Status     | Notes                                                                                 |
+| ----------------------------------------------- | ---------- | -------------------------------------------------------------------------------------- |
+| [Claude Code](https://claude.com/claude-code)   | ✅ Tested  | Wired via Claude Code's own hooks — see [`claude/example_hook_settings.json`](claude/example_hook_settings.json) and [`claude/hook.sh`](claude/hook.sh) |
+
+Update this table as support for other agents is added.
 
 ## Pad states
 
@@ -79,7 +95,7 @@ been tried.
 | `hid_protocol.py`                   | Wire-level binary report format for the HID transport (QMK-based pads) — see [Protocol](#protocol)        |
 | `fake_hooks.py`                     | Simulates a Claude Code session's hook events, for testing the daemon without real hooks wired up         |
 | `hid_bringup_test.py`               | Standalone hello/RGB round-trip check against a real QMK pad, independent of `daemon.py`                  |
-| `qmk-userspace/`                    | QMK userspace overlay, built against a separate local QMK checkout — `users/claude_macropad/` holds the protocol/state logic shared by every board's keymap; `keyboards/.../keymaps/claude_macropad/` holds each board's own layout, LED map, and device ID. Keychron K1 Pro also ships `keyboards/keychron/k1_pro/k1_pro.c.patch`, a small patch applied to that board's own (unmodified-otherwise) firmware checkout — see [QMK keyboard (Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified) for why |
+| `qmk-userspace/`                    | QMK userspace overlay, built against a separate local QMK checkout — `users/ai_agent_macropad/` holds the protocol/state logic shared by every board's keymap; `keyboards/.../keymaps/ai_agent_macropad/` holds each board's own layout, LED map, and device ID. Keychron K1 Pro also ships `keyboards/keychron/k1_pro/k1_pro.c.patch`, a small patch applied to that board's own (unmodified-otherwise) firmware checkout — see [QMK keyboard (Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified) for why |
 | `requirements.txt`                  | Python dependencies for the daemon                                                                        |
 | `requirements-dev.txt`              | Adds `pytest` on top of `requirements.txt`, for running the test suite                                    |
 | `tests/`                            | `pytest` suite for `daemon.py`, `pad_link.py`, and `hid_protocol.py` (see [Testing](#testing))             |
@@ -128,7 +144,7 @@ Follow whichever subsection matches your hardware; the rest of Setup
 #### QMK keyboard (NuPhy Air75 V2)
 
 Verified against real hardware. 4 slots wired by default (PageUp/PageDn/Home/End), each
-showing one Claude Code session's state via per-key RGB, and pressing one brings that
+showing one AI agent session's state via per-key RGB, and pressing one brings that
 session's window to the front (`dispatch_bring_to_front` in `daemon.py`). On boards
 built with `VIA_ENABLE` (this one is), up to 8 slots are reachable from the VIA app — drag
 one of the "AI Slot 4".."AI Slot 7" custom keycodes (see `via.json` in the keymap directory)
@@ -136,7 +152,7 @@ onto any spare key in the [VIA app](https://www.caniusevia.com/) and it lights u
 automatically; remap a slot key away and its LED goes dark just as automatically. (The shared
 firmware actually supports up to 12 slots, but VIA's app hard-caps `customKeycodes` at 32
 total entries, and NuPhy's own stock entries already use most of that budget — see the
-comment above `enum claude_macropad_keycodes` in `keymap.c` for the exact accounting.) The
+comment above `enum ai_agent_macropad_keycodes` in `keymap.c` for the exact accounting.) The
 keymap source lives in this repo under
 `qmk-userspace/` (a [QMK userspace
 overlay](https://docs.qmk.fm/newbs_external_userspace)), built against a separate local QMK
@@ -148,8 +164,8 @@ cd ../nuphy-qmk-firmware && git submodule update --init --recursive
 brew install qmk/qmk/qmk    # plus arm-none-eabi-gcc@8 (osx-cross/arm tap) for this board's STM32F072
 qmk config user.qmk_home=../nuphy-qmk-firmware
 
-cd ../claude-qmk/qmk-userspace
-QMK_USERSPACE="$(pwd)" qmk compile -kb nuphy/air75_v2/ansi -km claude_macropad
+cd ../ai-agent-macropad/qmk-userspace
+QMK_USERSPACE="$(pwd)" qmk compile -kb nuphy/air75_v2/ansi -km ai_agent_macropad
 ```
 
 To flash: unplug the board (or just turn it off), hold **Esc**, plug it back in over USB-C
@@ -158,7 +174,7 @@ anything keymap-specific, so it works for recovery too regardless of what firmwa
 currently on the board:
 
 ```
-QMK_USERSPACE="$(pwd)" qmk flash -kb nuphy/air75_v2/ansi -km claude_macropad
+QMK_USERSPACE="$(pwd)" qmk flash -kb nuphy/air75_v2/ansi -km ai_agent_macropad
 ```
 
 Then verify the wire protocol works before trusting the full daemon to it —
@@ -188,7 +204,7 @@ To reassign slots (e.g. to move a default slot off PageUp/PageDn/Home/End, or to
 
 1. In VIA's Settings page, enable **Show Design tab**.
 2. In the new Design tab, manually load
-   [`via.json`](qmk-userspace/keyboards/nuphy/air75_v2/ansi/keymaps/claude_macropad/via.json)
+   [`via.json`](qmk-userspace/keyboards/nuphy/air75_v2/ansi/keymaps/ai_agent_macropad/via.json)
    (this board isn't in VIA's official keyboard registry, so it won't be auto-detected —
    loading the file directly is what tells VIA how to talk to it).
 3. Switch to the Configure tab, make sure **layer 0** is selected, and drag any of the custom
@@ -197,7 +213,7 @@ To reassign slots (e.g. to move a default slot off PageUp/PageDn/Home/End, or to
 
 ![VIA Configure tab showing the AI Slot custom keycodes](./via.nuphy.air75.v2.png)
 
-Reassignments take effect immediately — no reflashing needed. `claude_macropad.c`'s dynamic
+Reassignments take effect immediately — no reflashing needed. `ai_agent_macropad.c`'s dynamic
 scan picks up wherever a slot key actually is the moment you make the change (see the "Dynamic
 AI-agent slots" work in this repo's history for how that works), and once you restart the
 daemon it'll rediscover the board with whatever layout you left it in.
@@ -205,9 +221,9 @@ daemon it'll rediscover the board with whatever layout you left it in.
 Porting to a different QMK board follows the same shape: a new keymap directory under
 `qmk-userspace/keyboards/`, with just its layout, LED-index table, and device ID — the
 HID protocol and `dispatch_bring_to_front` logic itself is shared code in
-`qmk-userspace/users/claude_macropad/`, not duplicated per board. Keep the keymap named
-`claude_macropad` (i.e. still `-km claude_macropad`) so QMK's build picks up that shared
-`users/claude_macropad/` directory automatically.
+`qmk-userspace/users/ai_agent_macropad/`, not duplicated per board. Keep the keymap named
+`ai_agent_macropad` (i.e. still `-km ai_agent_macropad`) so QMK's build picks up that shared
+`users/ai_agent_macropad/` directory automatically.
 
 #### QMK keyboard (Keychron K1 Pro, unverified)
 
@@ -240,12 +256,12 @@ cd ../keychron-qmk-firmware && git submodule update --init --recursive
 brew install qmk/qmk/qmk    # plus an ARM cross-compiler for this board's STM32L432
 qmk config user.qmk_home=../keychron-qmk-firmware
 
-git apply ../claude-macropad/qmk-userspace/keyboards/keychron/k1_pro/k1_pro.c.patch
+git apply ../ai-agent-macropad/qmk-userspace/keyboards/keychron/k1_pro/k1_pro.c.patch
 # (already cd'd into ../keychron-qmk-firmware above — the patch's paths
 # are relative to that repo's root, so no --directory needed here)
 
-cd ../claude-macropad/qmk-userspace
-QMK_USERSPACE="$(pwd)" qmk compile -kb keychron/k1_pro/ansi/rgb -km claude_macropad
+cd ../ai-agent-macropad/qmk-userspace
+QMK_USERSPACE="$(pwd)" qmk compile -kb keychron/k1_pro/ansi/rgb -km ai_agent_macropad
 ```
 
 To flash, per [Keychron's own
@@ -254,7 +270,7 @@ connect the USB-C cable, toggle the board's Mac/Win mode switch to **Off**, hold
 (or the reset button underneath the spacebar), then toggle the switch to **Cable**:
 
 ```
-QMK_USERSPACE="$(pwd)" qmk flash -kb keychron/k1_pro/ansi/rgb -km claude_macropad
+QMK_USERSPACE="$(pwd)" qmk flash -kb keychron/k1_pro/ansi/rgb -km ai_agent_macropad
 ```
 
 Then, same as the Air75 board, verify the wire protocol directly before trusting the daemon to
@@ -263,9 +279,9 @@ through every state correctly.
 
 Slot wiring, VIA reassignment, and the VIA/daemon exclusivity rule are all the same as [the
 Air75 board above](#qmk-keyboard-nuphy-air75-v2) — same 4 default slots (PageUp/PageDn/Home/End),
-same `claude_macropad`-named keymap directory, same idle-release behavior for VIA access,
+same `ai_agent_macropad`-named keymap directory, same idle-release behavior for VIA access,
 same `via.json`-loading Design-tab step (load
-[this board's `via.json`](qmk-userspace/keyboards/keychron/k1_pro/ansi/rgb/keymaps/claude_macropad/via.json)
+[this board's `via.json`](qmk-userspace/keyboards/keychron/k1_pro/ansi/rgb/keymaps/ai_agent_macropad/via.json)
 instead, which extends Keychron's own official VIA definition for this board rather than
 replacing it). One difference: this board's 13 stock custom keycodes (left/right Option, left/right
 Cmd, Task View, File Explorer, Screenshot, Cortana, Siri, 3 bluetooth host slots, battery level)
@@ -557,9 +573,9 @@ RP2040](https://www.adafruit.com/product/5100) over USB serial
 support has been removed — this project has moved fully to QMK/HID
 boards — but the firmware, host-side serial transport, and docs are
 still browsable at the last commit that had them:
-[`rp2040/`](https://github.com/pickypg/claude-macropad/tree/35ae51c7795e9f09feca3bb8bfdeea76b58eb60f/rp2040)
+[`rp2040/`](https://github.com/pickypg/ai-agent-macropad/tree/35ae51c7795e9f09feca3bb8bfdeea76b58eb60f/rp2040)
 (and that commit's
-[README](https://github.com/pickypg/claude-macropad/blob/35ae51c7795e9f09feca3bb8bfdeea76b58eb60f/README.md)
+[README](https://github.com/pickypg/ai-agent-macropad/blob/35ae51c7795e9f09feca3bb8bfdeea76b58eb60f/README.md)
 for the full serial protocol writeup and build steps).
 
 ![MacroPad in action example](./adafruit.macropad.rp2040.png)

@@ -1,4 +1,4 @@
-// Keychron K1 Pro (ANSI) keymap — Claude Code session-status pad.
+// Keychron K1 Pro (ANSI) keymap — AI agent session-status pad.
 //
 // UNVERIFIED ON REAL HARDWARE — no K1 Pro in hand to flash and test,
 // unlike the NuPhy Air75 V2 keymap in this repo (confirmed on real
@@ -29,16 +29,16 @@
 //
 // Ships 4 physical keys wired by default (PageUp/PageDn/Home/End, same
 // choice as the Air75 keymap) as AI_AGENT_KEY_0..3, each showing one
-// Claude Code session's state via per-key RGB. AI_AGENT_KEY_4..11 exist
+// AI agent session's state via per-key RGB. AI_AGENT_KEY_4..11 exist
 // as valid keycodes but aren't wired to any physical key here —
 // VIA_ENABLE lets an end user drag them onto spare keys themselves (see
-// claude_macropad.c's dynamic slot/LED discovery). This board's own 13
+// ai_agent_macropad.c's dynamic slot/LED discovery). This board's own 13
 // stock custom keycodes (KC_LOPTN..BAT_LVL in k1_pro.h) use up 13 of
 // VIA's 32-entry customKeycodes budget, leaving room for all 12
 // AI_AGENT_KEY_0..11 to be named in via.json (see that file) — unlike
 // the Air75 board, which could only fit 8 of its 12.
 #include QMK_KEYBOARD_H
-#include "claude_macropad.h"
+#include "ai_agent_macropad.h"
 
 enum layers {
     MAC_BASE,
@@ -56,7 +56,7 @@ enum layers {
 // keyboards/keychron/k1_pro/rules.mk's unconditional
 // `include keyboards/keychron/bluetooth/bluetooth.mk`). Starting here
 // (not a hardcoded offset) tracks that automatically if it ever changes.
-enum claude_macropad_keycodes {
+enum ai_agent_macropad_keycodes {
     AI_AGENT_KEY_0 = NEW_SAFE_RANGE,  // PageUp position (default)
     AI_AGENT_KEY_1,               // PageDn position (default)
     AI_AGENT_KEY_2,               // Home position (default)
@@ -71,7 +71,7 @@ enum claude_macropad_keycodes {
     AI_AGENT_KEY_11,               // unwired by default — VIA-assignable (named in via.json)
 };
 
-#define NUM_MACROPAD_SLOTS CLAUDE_MACROPAD_MAX_SLOTS
+#define NUM_MACROPAD_SLOTS AI_AGENT_MACROPAD_MAX_SLOTS
 #define DEVICE_ID_K1_PRO 0xC1
 
 // clang-format off
@@ -114,19 +114,19 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 // and the raw_hid_receive_kb() comment further down for why a non-VIA
 // build isn't an option on this particular board) — so, unlike the
 // Air75 keymap, there's no static slot_to_led fallback table here: a
-// live VIA/Vial keymap scan (claude_macropad_scan_slots()) is the only
+// live VIA/Vial keymap scan (ai_agent_macropad_scan_slots()) is the only
 // path, not one of two.
 void keyboard_post_init_user(void) {
     // NULL: a static table can't know where the user's put each key —
-    // claude_macropad_scan_slots() (safe here; via_init() already ran
+    // ai_agent_macropad_scan_slots() (safe here; via_init() already ran
     // and loaded the dynamic keymap EEPROM by this point in QMK's boot
     // sequence) builds the real one from the live keymap instead.
-    claude_macropad_init(NUM_MACROPAD_SLOTS, NULL);
-    claude_macropad_scan_slots(AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
+    ai_agent_macropad_init(NUM_MACROPAD_SLOTS, NULL);
+    ai_agent_macropad_scan_slots(AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
 }
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-    return claude_macropad_process_record(keycode, record, AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
+    return ai_agent_macropad_process_record(keycode, record, AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
 }
 
 // This keymap only supports VIA_ENABLE=yes builds (this directory's
@@ -140,9 +140,9 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 // directory) is applied to the board-level k1_pro.c — see this file's
 // top comment. It plays exactly the role the Air75 keymap's
 // via_command_kb() does (early-intercept, ahead of via.c's own
-// dispatch): claude_macropad_track_via_remap() peeks at VIA's dynamic
+// dispatch): ai_agent_macropad_track_via_remap() peeks at VIA's dynamic
 // keymap commands to keep the slot -> LED table in sync with
-// VIA-driven remaps, then claude_macropad_raw_hid_receive() handles
+// VIA-driven remaps, then ai_agent_macropad_raw_hid_receive() handles
 // this protocol's own MSG_* messages. Returning true here fully claims
 // the report (via_command_kb() in k1_pro.c passes this return value
 // straight back to via.c, so a `true` here has the same "don't run
@@ -150,11 +150,11 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 // keymap's comment describes) — false lets it fall through to via.c's
 // normal handling, same as any other unrecognized command.
 bool raw_hid_receive_kb(uint8_t *data, uint8_t length) {
-    claude_macropad_track_via_remap(data, length, AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
-    return claude_macropad_raw_hid_receive(data, length, DEVICE_ID_K1_PRO, NUM_MACROPAD_SLOTS);
+    ai_agent_macropad_track_via_remap(data, length, AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
+    return ai_agent_macropad_raw_hid_receive(data, length, DEVICE_ID_K1_PRO, NUM_MACROPAD_SLOTS);
 }
 
 bool rgb_matrix_indicators_user(void) {
-    claude_macropad_paint_indicators(NUM_MACROPAD_SLOTS);
+    ai_agent_macropad_paint_indicators(NUM_MACROPAD_SLOTS);
     return true;
 }

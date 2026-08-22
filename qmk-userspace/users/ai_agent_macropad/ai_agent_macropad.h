@@ -1,6 +1,6 @@
-// Shared protocol/state logic for any QMK keyboard acting as a
-// Claude Code session-status pad. One copy of this file backs every
-// board's keymap (see keyboards/*/.../keymaps/claude_macropad/keymap.c) —
+// Shared protocol/state logic for any QMK keyboard acting as an
+// AI agent session-status pad. One copy of this file backs every
+// board's keymap (see keyboards/*/.../keymaps/ai_agent_macropad/keymap.c) —
 // each keymap supplies only its own layout, LED-index table, and device
 // ID, then calls into these functions.
 //
@@ -12,19 +12,19 @@
 #include "quantum.h"
 
 // Raw HID reports are always 32 bytes on this protocol.
-#define CLAUDE_MACROPAD_REPORT_SIZE 32
+#define AI_AGENT_MACROPAD_REPORT_SIZE 32
 
 // Upper bound on slots any single board can expose — sized generously
 // (matches the RP2040 MacroPad's 12 keys) so it doesn't need bumping
 // for a denser board later.
-#define CLAUDE_MACROPAD_MAX_SLOTS 12
+#define AI_AGENT_MACROPAD_MAX_SLOTS 12
 
 // Message types — must match hid_protocol.py.
 //
 // MSG_SLOT/MSG_PING/MSG_KEY live at 0x20+ deliberately: 0x01-0x15 is
 // QMK VIA's own reserved via_command_id range (quantum/via.h) for
 // boards built with VIA_ENABLE=yes, which share this raw HID
-// endpoint — claude_macropad_raw_hid_receive() gets wired in ahead of
+// endpoint — ai_agent_macropad_raw_hid_receive() gets wired in ahead of
 // VIA's own dispatch (see its doc comment), so a value inside that
 // range would either get swallowed by VIA or corrupt VIA's own
 // command handling, depending on which one runs first.
@@ -35,7 +35,7 @@
 // interface's first-ever report is likely to contain by coincidence.
 // 0xA1 ("AI") is distinctive enough that a collision would mean
 // something is actually wrong (and is well clear of VIA's range too).
-enum claude_macropad_msg {
+enum ai_agent_macropad_msg {
     MSG_HELLO = 0xA1,
     MSG_SLOT  = 0x20,
     MSG_PING  = 0x21,
@@ -60,7 +60,7 @@ enum claude_macropad_msg {
 // build predates a state the daemon has since added) falls through to
 // state_to_rgb()'s "unknown" fallback color instead of silently
 // reusing STATE_IDLE's.
-enum claude_macropad_state {
+enum ai_agent_macropad_state {
     STATE_IDLE = 0,
     STATE_WORKING,
     STATE_WAITING,
@@ -76,9 +76,9 @@ enum claude_macropad_state {
 // mapping from `slot_to_led` (a static slot-index -> LED-index table,
 // keyboard-specific, read off keyboard.json's rgb_matrix.layout). On
 // VIA_ENABLE boards, pass NULL — a static table can't know where the
-// user has actually put each key — and call claude_macropad_scan_slots()
+// user has actually put each key — and call ai_agent_macropad_scan_slots()
 // right after instead. Call once from keyboard_post_init_user().
-void claude_macropad_init(uint8_t num_slots, const uint8_t *slot_to_led);
+void ai_agent_macropad_init(uint8_t num_slots, const uint8_t *slot_to_led);
 
 // Call from process_record_user(). `slot_key_base` is the keymap's
 // first AI_AGENT_KEY_* custom keycode (its remaining AI_AGENT_KEY_1..
@@ -86,20 +86,20 @@ void claude_macropad_init(uint8_t num_slots, const uint8_t *slot_to_led);
 // (keycode handled, swallowed) for a slot key press/release, true
 // otherwise — pass that straight back as process_record_user's return
 // value.
-bool claude_macropad_process_record(uint16_t keycode, keyrecord_t *record, uint16_t slot_key_base, uint8_t num_slots);
+bool ai_agent_macropad_process_record(uint16_t keycode, keyrecord_t *record, uint16_t slot_key_base, uint8_t num_slots);
 
 #ifdef VIA_ENABLE
 // VIA_ENABLE-only: (re)builds the slot -> LED table from scratch by
 // scanning every matrix position's *dynamic* (EEPROM, user-remappable)
 // keycode on layer 0 for anything in [slot_key_base, slot_key_base +
 // num_slots). Call once from keyboard_post_init_user(), right after
-// claude_macropad_init(NUM_SLOTS, NULL) — QMK's own boot sequence
+// ai_agent_macropad_init(NUM_SLOTS, NULL) — QMK's own boot sequence
 // always runs via_init() (which loads the dynamic keymap EEPROM)
 // before keyboard_post_init_user(), so the data is ready by then.
-void claude_macropad_scan_slots(uint16_t slot_key_base, uint8_t num_slots);
+void ai_agent_macropad_scan_slots(uint16_t slot_key_base, uint8_t num_slots);
 
 // VIA_ENABLE-only. Call from via_command_kb(), alongside (order
-// doesn't matter) claude_macropad_raw_hid_receive() — this only peeks
+// doesn't matter) ai_agent_macropad_raw_hid_receive() — this only peeks
 // at VIA's own dynamic-keymap commands, it never claims them. Keeps
 // the slot -> LED table in sync whenever the user remaps a key via
 // VIA: clears a slot immediately if its key gets remapped away (so its
@@ -110,7 +110,7 @@ void claude_macropad_scan_slots(uint16_t slot_key_base, uint8_t num_slots);
 // bulk keymap import (VIA's advanced JSON-import feature) needs one
 // follow-up key edit, or a power cycle, to resync — a deliberate scope
 // cut, not an oversight.
-void claude_macropad_track_via_remap(uint8_t *data, uint8_t length, uint16_t slot_key_base, uint8_t num_slots);
+void ai_agent_macropad_track_via_remap(uint8_t *data, uint8_t length, uint16_t slot_key_base, uint8_t num_slots);
 #endif
 
 // Call from raw_hid_receive() on boards without VIA_ENABLE, or from
@@ -122,10 +122,10 @@ void claude_macropad_track_via_remap(uint8_t *data, uint8_t length, uint16_t slo
 // Returns true if `data` was one of this protocol's message types,
 // false otherwise (VIA_ENABLE boards should fall through to VIA's own
 // dispatch in that case; non-VIA boards can ignore the return value).
-bool claude_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t device_id, uint8_t num_slots);
+bool ai_agent_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t device_id, uint8_t num_slots);
 
 // Call from rgb_matrix_indicators_user(). Paints each slot's state
-// onto its current LED, per the table claude_macropad_init()/
-// claude_macropad_scan_slots() built — a slot with no key currently
+// onto its current LED, per the table ai_agent_macropad_init()/
+// ai_agent_macropad_scan_slots() built — a slot with no key currently
 // assigned (NO_LED) is simply skipped.
-void claude_macropad_paint_indicators(uint8_t num_slots);
+void ai_agent_macropad_paint_indicators(uint8_t num_slots);
