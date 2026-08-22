@@ -1,3 +1,4 @@
+import os
 import subprocess
 import types
 
@@ -97,6 +98,73 @@ def test_tmux_pane_for_tty_no_tmux_on_path(monkeypatch):
     assert daemon._tmux_pane_for_tty("/dev/ttys001") is None
 
 
+# --- discover_running_grok_sessions -----------------------------------------
+
+
+def test_discover_running_grok_sessions_parses_json_array(tmp_path, monkeypatch):
+    path = tmp_path / "active_sessions.json"
+    path.write_text(
+        '[{"session_id": "g1", "pid": 1, "cwd": "/x/proj", "opened_at": "t"}]'
+    )
+    monkeypatch.setattr(daemon, "_grok_active_sessions_path", lambda: path)
+    monkeypatch.setattr(daemon, "_pid_alive", lambda pid: True)
+    assert daemon.discover_running_grok_sessions() == [
+        {"session_id": "g1", "pid": 1, "cwd": "/x/proj", "opened_at": "t", "sessionId": "g1"}
+    ]
+
+
+def test_discover_running_grok_sessions_missing_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        daemon, "_grok_active_sessions_path", lambda: tmp_path / "does-not-exist.json"
+    )
+    assert daemon.discover_running_grok_sessions() == []
+
+
+def test_discover_running_grok_sessions_bad_json(tmp_path, monkeypatch):
+    path = tmp_path / "active_sessions.json"
+    path.write_text("not json")
+    monkeypatch.setattr(daemon, "_grok_active_sessions_path", lambda: path)
+    assert daemon.discover_running_grok_sessions() == []
+
+
+def test_discover_running_grok_sessions_unexpected_shape(tmp_path, monkeypatch):
+    path = tmp_path / "active_sessions.json"
+    path.write_text('{"not": "a list"}')
+    monkeypatch.setattr(daemon, "_grok_active_sessions_path", lambda: path)
+    assert daemon.discover_running_grok_sessions() == []
+
+
+def test_discover_running_grok_sessions_drops_dead_pids(tmp_path, monkeypatch):
+    """Unlike `claude agents --json` (a live command that only ever
+    reports genuinely running sessions), active_sessions.json is a
+    plain file Grok Build's own processes maintain themselves — a
+    crashed or kill -9'd session could leave a stale entry behind, so
+    this filters on the pid actually being alive.
+    """
+    path = tmp_path / "active_sessions.json"
+    path.write_text(
+        '[{"session_id": "alive", "pid": 1, "cwd": "/x/a"},'
+        ' {"session_id": "dead", "pid": 2, "cwd": "/x/b"}]'
+    )
+    monkeypatch.setattr(daemon, "_grok_active_sessions_path", lambda: path)
+    monkeypatch.setattr(daemon, "_pid_alive", lambda pid: pid == 1)
+    result = daemon.discover_running_grok_sessions()
+    assert [s["sessionId"] for s in result] == ["alive"]
+
+
+# --- _pid_alive --------------------------------------------------------------
+
+
+def test_pid_alive_true_for_self():
+    assert daemon._pid_alive(os.getpid()) is True
+
+
+def test_pid_alive_false_for_exited_process():
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    assert daemon._pid_alive(proc.pid) is False
+
+
 # --- Daemon.seed_existing_sessions -----------------------------------------
 
 
@@ -109,6 +177,7 @@ def test_seed_existing_sessions_allocates_slots_and_sends_idle(recording_daemon,
             {"pid": 2, "cwd": "/x/proj-b", "sessionId": "sb", "kind": "interactive"},
         ],
     )
+    monkeypatch.setattr(daemon, "discover_running_grok_sessions", lambda: [])
     monkeypatch.setattr(daemon, "_controlling_tty", lambda pid: None)
 
     d.seed_existing_sessions()
@@ -116,8 +185,6 @@ def test_seed_existing_sessions_allocates_slots_and_sends_idle(recording_daemon,
     assert d.slots.slot_for("sa") == 0
     assert d.slots.slot_for("sb") == 1
     assert d.session_projects == {"sa": "proj-a", "sb": "proj-b"}
-    # This seeding path can only ever see Claude Code sessions — see
-    # discover_running_sessions()'s docstring
     assert d.session_agents == {"sa": "claude-code", "sb": "claude-code"}
     # The two real sessions get idle; every other slot this daemon
     # process didn't just claim gets explicitly cleared to off, so a
@@ -136,6 +203,7 @@ def test_seed_existing_sessions_backfills_tty_and_tmux_pane(recording_daemon, mo
         daemon, "discover_running_sessions",
         lambda: [{"pid": 42, "cwd": "/x/proj", "sessionId": "s1", "kind": "interactive"}],
     )
+    monkeypatch.setattr(daemon, "discover_running_grok_sessions", lambda: [])
     monkeypatch.setattr(daemon, "_controlling_tty", lambda pid: "/dev/ttys003")
     monkeypatch.setattr(daemon, "_tmux_pane_for_tty", lambda tty: "%7")
 
@@ -155,6 +223,7 @@ def test_seed_existing_sessions_no_pad_target_when_tty_unknown(recording_daemon,
         daemon, "discover_running_sessions",
         lambda: [{"pid": 1, "cwd": "/x/proj", "sessionId": "s1", "kind": "interactive"}],
     )
+    monkeypatch.setattr(daemon, "discover_running_grok_sessions", lambda: [])
     monkeypatch.setattr(daemon, "_controlling_tty", lambda pid: None)
     monkeypatch.setattr(
         daemon, "_tmux_pane_for_tty",
@@ -173,6 +242,7 @@ def test_seed_existing_sessions_skips_entries_without_session_id(recording_daemo
         daemon, "discover_running_sessions",
         lambda: [{"pid": 1, "cwd": "/x/proj"}],
     )
+    monkeypatch.setattr(daemon, "discover_running_grok_sessions", lambda: [])
     d.seed_existing_sessions()
     # No real session got allocated, so every slot is "other" — all of
     # them get cleared to off.
@@ -189,6 +259,7 @@ def test_seed_existing_sessions_stops_at_slot_capacity(recording_daemon, monkeyp
             {"pid": 2, "cwd": "/x/b", "sessionId": "sb"},
         ],
     )
+    monkeypatch.setattr(daemon, "discover_running_grok_sessions", lambda: [])
     monkeypatch.setattr(daemon, "_controlling_tty", lambda pid: None)
 
     d.seed_existing_sessions()
@@ -212,6 +283,7 @@ def test_seed_existing_sessions_clears_unclaimed_slots_only(recording_daemon, mo
         daemon, "discover_running_sessions",
         lambda: [{"pid": 1, "cwd": "/x/proj", "sessionId": "s1", "kind": "interactive"}],
     )
+    monkeypatch.setattr(daemon, "discover_running_grok_sessions", lambda: [])
     monkeypatch.setattr(daemon, "_controlling_tty", lambda pid: None)
 
     d.seed_existing_sessions()
@@ -235,6 +307,7 @@ def test_seeded_session_pane_backfilled_by_later_hook_event(recording_daemon, mo
         daemon, "discover_running_sessions",
         lambda: [{"pid": 1, "cwd": "/x/proj", "sessionId": "s1", "kind": "interactive"}],
     )
+    monkeypatch.setattr(daemon, "discover_running_grok_sessions", lambda: [])
     monkeypatch.setattr(daemon, "_controlling_tty", lambda pid: None)
     d.seed_existing_sessions()
     assert "s1" not in d.session_panes
@@ -243,3 +316,31 @@ def test_seeded_session_pane_backfilled_by_later_hook_event(recording_daemon, mo
         {"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash", "tmux_pane": "%9"}
     )
     assert d.session_panes["s1"] == "%9"
+
+
+def test_seed_existing_sessions_merges_claude_and_grok_sources(recording_daemon, monkeypatch):
+    """The two discovery sources are independent and additive — a
+    Claude Code session from `claude agents --json` and a Grok Build
+    session from active_sessions.json showing up at the same startup
+    both get seeded, each tagged with its own agent.
+    """
+    d, sent = recording_daemon
+    monkeypatch.setattr(
+        daemon, "discover_running_sessions",
+        lambda: [{"pid": 1, "cwd": "/x/claude-proj", "sessionId": "sc"}],
+    )
+    monkeypatch.setattr(
+        daemon, "discover_running_grok_sessions",
+        lambda: [{"pid": 2, "cwd": "/x/grok-proj", "sessionId": "sg"}],
+    )
+    monkeypatch.setattr(daemon, "_controlling_tty", lambda pid: None)
+
+    d.seed_existing_sessions()
+
+    assert d.slots.slot_for("sc") == 0
+    assert d.slots.slot_for("sg") == 1
+    assert d.session_agents == {"sc": "claude-code", "sg": "grok-build"}
+    assert sent[:2] == [
+        {"t": "slot", "i": 0, "state": "idle", "label": "claude-proj"},
+        {"t": "slot", "i": 1, "state": "idle", "label": "grok-proj"},
+    ]

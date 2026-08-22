@@ -53,18 +53,20 @@ install hidapi on macOS) — optional: daemon.py runs fine without
 either installed, it just can't attach to a pad.
 
 At startup, before the socket starts accepting hook events, the
-daemon also seeds slots for any Claude Code sessions that were
-already running (e.g. a daemon restart mid-session) via `claude
-agents --json` — see discover_running_sessions() and
-Daemon.seed_existing_sessions() below. Requires Claude Code >=2.1.224;
-an older CLI (or no `claude` on PATH) just means seeding finds nothing
-and pre-existing sessions fall back to the pre-existing
-lazy-allocation-on-first-hook-event behavior instead. This seeding
-path is Claude-Code-specific — there's no equivalent `codex agents
---json` to seed pre-existing Codex sessions from, so those always
-start out via the lazy-allocation fallback in handle_hook_event()
-instead, same as any hook event that arrives before this daemon ever
-saw that session's SessionStart.
+daemon also seeds slots for any Claude Code or Grok Build sessions
+that were already running (e.g. a daemon restart mid-session) — via
+`claude agents --json` for the former, Grok Build's own
+active_sessions.json registry file for the latter — see
+discover_running_sessions(), discover_running_grok_sessions(), and
+Daemon.seed_existing_sessions() below. Each is independently
+best-effort: an older Claude Code (<2.1.224), no `claude` on PATH, no
+Grok Build ever installed/run, or any parse failure for either just
+means that source seeds nothing, and its pre-existing sessions fall
+back to the lazy-allocation-on-first-hook-event behavior instead.
+Codex has neither mechanism, so its pre-existing sessions always start
+out via the lazy-allocation fallback in handle_hook_event() instead,
+same as any hook event that arrives before this daemon ever saw that
+session's SessionStart.
 """
 import asyncio
 import json
@@ -268,22 +270,32 @@ class SlotManager:
 
 # --- Existing session discovery -----------------------------------------
 #
-# A restarted daemon (or one started after Claude Code sessions are
+# A restarted daemon (or one started after some agent's sessions are
 # already open) otherwise has no slots until each pre-existing session
 # happens to fire some hook event — see the lazy-allocation fallback
-# in handle_hook_event, added for exactly this case. `claude agents
-# --json` (Claude Code >=2.1.224) prints every currently-active
-# session — interactive and background — as a JSON array with at
-# least pid/cwd/sessionId, letting the daemon seed slots for all of
-# them at startup instead of waiting. Best-effort: an older CLI, no
-# `claude` on PATH, or any parse failure just means an empty list,
-# same headless-friendly posture as pad discovery elsewhere in this
-# file.
+# in handle_hook_event, added for exactly this case. Two agents have a
+# way to discover this at startup, each via a completely different
+# mechanism:
 #
-# Claude-Code-specific: there's no equivalent CLI query for Codex (or
-# any other agent) sessions, so this only ever seeds Claude Code
-# sessions. A pre-existing Codex session just waits for its first real
-# hook event, same as every other lazy-allocation path in this file.
+# - Claude Code: `claude agents --json` (Claude Code >=2.1.224) prints
+#   every currently-active session — interactive and background — as a
+#   JSON array with at least pid/cwd/sessionId. Best-effort: an older
+#   CLI, no `claude` on PATH, or any parse failure just means an empty
+#   list, same headless-friendly posture as pad discovery elsewhere in
+#   this file. See discover_running_sessions() below.
+#
+# - Grok Build: no CLI query needed — it maintains its own live
+#   registry file, $GROK_HOME/active_sessions.json (default
+#   ~/.grok/active_sessions.json), a JSON array of
+#   {session_id, pid, cwd, opened_at} for every currently-open session
+#   on this machine, confirmed live against a real running `grok`
+#   process. Same best-effort posture: a missing file, bad JSON, or an
+#   unexpected shape just mean an empty list. See
+#   discover_running_grok_sessions() below.
+#
+# Codex has neither, so a pre-existing Codex session always just waits
+# for its first real hook event, same as every other lazy-allocation
+# path in this file.
 
 def discover_running_sessions():
     try:
@@ -311,6 +323,68 @@ def discover_running_sessions():
         log.warning("unexpected `claude agents --json` output shape: %r", sessions)
         return []
     return sessions
+
+
+def _grok_active_sessions_path():
+    # Same override Grok Build itself honors for its config directory
+    # (see its headless-mode docs) — read from the right place if the
+    # user has ever set this, rather than hardcoding ~/.grok.
+    return Path(os.environ.get("GROK_HOME", os.path.expanduser("~/.grok"))) / "active_sessions.json"
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        # e.g. PermissionError — process exists, just owned by someone
+        # else, which still counts as alive for this check.
+        return True
+    return True
+
+
+def discover_running_grok_sessions():
+    """Grok Build's equivalent of discover_running_sessions() above,
+    for seeding pre-existing Grok Build sessions at daemon startup —
+    see Daemon.seed_existing_sessions(). No CLI query exists (or is
+    needed): Grok Build maintains its own live registry file,
+    $GROK_HOME/active_sessions.json (default
+    ~/.grok/active_sessions.json), as a JSON array of
+    {session_id, pid, cwd, opened_at} for every currently-open session
+    on this machine — confirmed live against a real running `grok`
+    process during development.
+
+    Renames session_id -> sessionId so the shared allocation loop in
+    seed_existing_sessions() can treat entries from either source
+    identically without needing to know which one produced them.
+
+    Best-effort, same posture as discover_running_sessions(): no file
+    (Grok Build never installed, or never run), bad JSON, or an
+    unexpected shape all just mean an empty list. Unlike `claude agents
+    --json` — a live command that only ever reports genuinely running
+    sessions — this is a plain file Grok Build's own processes
+    maintain themselves, so a session that crashed or was kill -9'd
+    before it could remove its own entry would otherwise linger here
+    forever; entries are dropped if their pid isn't actually alive.
+    """
+    try:
+        raw = _grok_active_sessions_path().read_text()
+    except OSError:
+        return []
+    try:
+        sessions = json.loads(raw)
+    except ValueError:
+        log.warning("bad JSON in %s: %r", _grok_active_sessions_path(), raw[:200])
+        return []
+    if not isinstance(sessions, list):
+        log.warning("unexpected %s shape: %r", _grok_active_sessions_path(), sessions)
+        return []
+    return [
+        {**s, "sessionId": s.get("session_id")}
+        for s in sessions
+        if s.get("pid") is None or _pid_alive(s["pid"])
+    ]
 
 
 def _controlling_tty(pid):
@@ -1103,8 +1177,9 @@ class Daemon:
             writer.close()
 
     def seed_existing_sessions(self):
-        """Pre-populate slots from `claude agents --json` (see
-        discover_running_sessions() above) so sessions already running
+        """Pre-populate slots from each agent's own pre-existing-session
+        discovery (see the "Existing session discovery" comment block
+        above discover_running_sessions()) so sessions already running
         when this daemon starts show up on the pad immediately, instead
         of staying blank until they happen to fire a hook event. Called
         once from serve(), before the socket starts accepting hook
@@ -1124,41 +1199,45 @@ class Daemon:
         there showing stale state forever, since nothing else ever
         revisits an unallocated slot.
         """
-        sessions = discover_running_sessions()
-        for s in sessions:
-            session_id = s.get("sessionId")
-            if not session_id:
-                continue
-            i = self.slots.allocate(session_id)
-            if i is None:
-                continue
-            label = Path(s.get("cwd", "")).name or session_id[:8]
-            self.session_projects[session_id] = label
-            # Always "claude-code" — see discover_running_sessions()'s
-            # docstring for why this seeding path can't ever see a
-            # pre-existing session from another agent.
-            self.session_agents[session_id] = "claude-code"
+        sources = (
+            (discover_running_sessions(), "claude-code", "`claude agents --json`"),
+            (
+                discover_running_grok_sessions(), "grok-build",
+                str(_grok_active_sessions_path()),
+            ),
+        )
+        for sessions, agent, source_label in sources:
+            for s in sessions:
+                session_id = s.get("sessionId")
+                if not session_id:
+                    continue
+                i = self.slots.allocate(session_id)
+                if i is None:
+                    continue
+                label = Path(s.get("cwd", "")).name or session_id[:8]
+                self.session_projects[session_id] = label
+                self.session_agents[session_id] = agent
 
-            tty = None
-            pid = s.get("pid")
-            if pid:
-                tty = _controlling_tty(pid)
-            if tty:
-                self.session_ttys[session_id] = tty
-                pane = _tmux_pane_for_tty(tty)
-                if pane:
-                    self.session_panes[session_id] = pane
+                tty = None
+                pid = s.get("pid")
+                if pid:
+                    tty = _controlling_tty(pid)
+                if tty:
+                    self.session_ttys[session_id] = tty
+                    pane = _tmux_pane_for_tty(tty)
+                    if pane:
+                        self.session_panes[session_id] = pane
 
-            self._send_pad({"t": "slot", "i": i, "state": "idle", "label": label})
-            events_log.info(
-                "MAPPED slot=%s state=idle pane=%s tty=%s project=%s (seeded at startup)",
-                i, self.session_panes.get(session_id, "<none>"), tty or "<none>", label,
-            )
-        if sessions:
-            log.info(
-                "seeded %d pre-existing session(s) from `claude agents --json`",
-                len(sessions),
-            )
+                self._send_pad({"t": "slot", "i": i, "state": "idle", "label": label})
+                events_log.info(
+                    "MAPPED slot=%s state=idle agent=%s pane=%s tty=%s project=%s (seeded at startup)",
+                    i, agent, self.session_panes.get(session_id, "<none>"), tty or "<none>", label,
+                )
+            if sessions:
+                log.info(
+                    "seeded %d pre-existing session(s) from %s",
+                    len(sessions), source_label,
+                )
 
         cleared = 0
         for i in range(self.slots.num_slots):

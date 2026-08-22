@@ -332,25 +332,30 @@ share the same raw HID interface without you having to manually stop
 the daemon first — see that section for the exclusivity details.
 
 Before it starts accepting hook events, the daemon also seeds slots
-for any Claude Code sessions that were *already* running — e.g. a
-daemon restart while sessions are mid-conversation — by shelling out
-to `claude agents --json` (Claude Code ≥2.1.224) and allocating a slot
-per session it reports, so the pad shows them immediately instead of
-waiting for each one to happen to fire a hook event first. Requires an
-up-to-date `claude` on `PATH`; an older CLI (or none at all) just
-means seeding finds nothing, and pre-existing sessions fall back to
-picking up a slot lazily on their first hook event instead. Every
-*other* slot — anything not claimed by a real session in that
-`claude agents --json` output — gets explicitly cleared to off, so a
-slot left glowing by a session that died without a clean `SessionEnd`
-(a crash, `kill -9`, or a previous daemon run that never shut down
-properly) doesn't linger forever; the pad has no way to know the old
-daemon process is gone, so nothing else would ever revisit that slot
-otherwise (see `Daemon.seed_existing_sessions()` in `daemon.py`).
-This seeding path is Claude-Code-specific — there's no equivalent
-`codex agents --json` — so a pre-existing Codex session just falls
-back to the same lazy-allocation-on-first-hook-event behavior as
-everything else.
+for any Claude Code or Grok Build sessions that were *already*
+running — e.g. a daemon restart while sessions are mid-conversation —
+so the pad shows them immediately instead of waiting for each one to
+happen to fire a hook event first. Each agent uses a different
+discovery mechanism: Claude Code by shelling out to `claude agents
+--json` (Claude Code ≥2.1.224); Grok Build by reading its own
+`~/.grok/active_sessions.json` registry file directly (no subprocess
+needed), filtering out any entry whose `pid` isn't actually still
+alive, since — unlike a live CLI query — that's a plain file Grok
+Build's own processes maintain themselves and could leave stale after
+a crash or `kill -9`. Both are best-effort and independent: an older
+Claude Code (or none on `PATH`), and/or no Grok Build ever
+installed/run, just means that source seeds nothing, and its
+pre-existing sessions fall back to picking up a slot lazily on their
+first hook event instead. Every *other* slot — anything neither source
+claimed — gets explicitly cleared to off, so a slot left glowing by a
+session that died without a clean `SessionEnd` (a crash, `kill -9`, or
+a previous daemon run that never shut down properly) doesn't linger
+forever; the pad has no way to know the old daemon process is gone, so
+nothing else would ever revisit that slot otherwise (see
+`Daemon.seed_existing_sessions()`, `discover_running_sessions()`, and
+`discover_running_grok_sessions()` in `daemon.py`). Codex has neither
+mechanism, so a pre-existing Codex session always falls back to the
+same lazy-allocation-on-first-hook-event behavior as everything else.
 
 ### 3. Try it without real hooks
 
@@ -593,11 +598,13 @@ stands in for it):
 - The slots-from-handshake path (`HidPadLink.handshake()`,
   `Daemon.apply_handshake()`) is tested in `tests/test_pad_handshake.py`,
   including the timeout/no-reply/headless cases.
-- Startup seeding of pre-existing sessions (`discover_running_sessions()`,
-  `Daemon.seed_existing_sessions()`, and the tty/tmux-pane backfill
-  helpers) is tested in `tests/test_seed_existing_sessions.py`, with
-  `subprocess.run` swapped for a recording fake the same way as the
-  other discovery tests.
+- Startup seeding of pre-existing sessions — `discover_running_sessions()`
+  (Claude Code, via `subprocess.run` swapped for a recording fake),
+  `discover_running_grok_sessions()` (Grok Build, via a temp
+  `active_sessions.json` and a monkeypatched `_pid_alive()`),
+  `Daemon.seed_existing_sessions()` merging both sources, and the
+  tty/tmux-pane backfill helpers — is tested in
+  `tests/test_seed_existing_sessions.py`.
 - The idle-release orchestration (`Daemon._reconcile_pad()`,
   `Daemon._kick_reconcile()` — opening the pad when a session starts,
   closing it after `IDLE_CLOSE_GRACE_SECONDS` once the last one ends,
@@ -690,9 +697,10 @@ a QMK-based pad reports — see `Daemon.apply_handshake()` in
 headless or doesn't answer the handshake in time.
 
 Sessions already running when the daemon starts are seeded into slots
-up front via `claude agents --json`, rather than waiting for their next
-hook event — see `Daemon.seed_existing_sessions()` in `daemon.py` and
-[Run the daemon](#2-run-the-daemon) above.
+up front — via `claude agents --json` for Claude Code, or Grok Build's
+own `~/.grok/active_sessions.json` registry file — rather than waiting
+for their next hook event. See `Daemon.seed_existing_sessions()` in
+`daemon.py` and [Run the daemon](#2-run-the-daemon) above.
 
 ### Pad messages (HID reports)
 
@@ -746,11 +754,12 @@ pad now works end to end:
 
 - ✅ Claude Code hook wiring (`settings.json` block + `hook.sh`)
 - ✅ Codex CLI hook wiring (`hooks.json`/`config.toml` block + `hook.sh`), verified with a real `codex exec` run
+- ✅ Grok Build hook wiring (`~/.grok/hooks/*.json` file + `hook.sh`, translating its camelCase/snake_case-valued payloads), verified with a real `grok -p ...` run
 - ✅ Socket server + hook-event → pad-state mapping, shared across agents
 - ✅ HID protocol to/from QMK keyboards (e.g. NuPhy Air75 V2), with pad auto-discovery
 - ✅ Slot allocation for concurrent sessions (any mix of agents)
 - ✅ Key-press → bring-window-to-front dispatch (macOS)
-- ✅ Startup seeding of already-running sessions (`claude agents --json`) — Claude-Code-only, see [Agents tested](#agents-tested)
+- ✅ Startup seeding of already-running sessions — `claude agents --json` (Claude Code) or `~/.grok/active_sessions.json` (Grok Build); Codex has neither, see [Agents tested](#agents-tested)
 - ✅ Idle-release: the pad connection closes when no session is active, freeing it for VIA
 - ⚠️ Keychron K1 Pro (ANSI) QMK keymap — written against Keychron's own official firmware
   source, unverified on real hardware (see [QMK keyboard (Keychron K1 Pro,
