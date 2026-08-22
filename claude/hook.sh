@@ -1,5 +1,11 @@
 #!/bin/bash
-# Claude Code Macropad — hook script.
+# AI Agent Macropad — Claude Code hook adapter.
+#
+# Translates Claude Code's own hook JSON into this repo's agent-
+# agnostic wire format (see daemon.py's module docstring) and forwards
+# it to the daemon's socket. codex/hook.sh is the same idea for Codex
+# CLI — see it for comparison; the two scripts diverge only where
+# their agents' own hook payloads do.
 #
 # Wired into settings.json for SessionStart, UserPromptSubmit,
 # PreToolUse, PostToolUse, PermissionRequest, Notification, Stop,
@@ -29,6 +35,9 @@
 #    gets it. Restricted to SessionStart since ps has real cost and
 #    a session's controlling tty doesn't change over its lifetime.
 #
+# 4. agent — always "claude-code" here. Bookkeeping only (see
+#    daemon.py's session_agents) — doesn't affect state mapping.
+#
 # -c is required on jq: its default output is pretty-printed across
 # multiple lines, which breaks the newline-delimited-JSON protocol
 # both code.py and daemon.py rely on (one full object per line) — see
@@ -40,7 +49,7 @@
 # needs to stay fast — nc's -w1 caps the connection attempt at 1s, and
 # the ps call above is skipped entirely except at SessionStart.
 
-SOCKET="$HOME/.claude-macropad/daemon.sock"
+SOCKET="$HOME/.ai-agent-macropad/daemon.sock"
 
 input=$(cat)
 event=$(printf '%s' "$input" | jq -r '.hook_event_name // empty')
@@ -58,6 +67,7 @@ printf '%s' "$input" | jq -c \
   --arg ntype "$MACROPAD_NOTIFICATION_TYPE" \
   --arg ctty "$ctty" \
   '.tmux_pane = $pane
+   | .agent = "claude-code"
    | (if $ntype != "" then .notification_type = $ntype else . end)
    | (if $ctty  != "" then .controlling_tty = $ctty  else . end)' \
   | nc -U -w1 "$SOCKET" >/dev/null 2>&1

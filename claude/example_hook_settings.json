@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude-macropad/hook.sh"
+            "command": "$HOME/.ai-agent-macropad/hook-claude.sh"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude-macropad/hook.sh"
+            "command": "$HOME/.ai-agent-macropad/hook-claude.sh"
           }
         ]
       }
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude-macropad/hook.sh"
+            "command": "$HOME/.ai-agent-macropad/hook-claude.sh"
           }
         ]
       }
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude-macropad/hook.sh"
+            "command": "$HOME/.ai-agent-macropad/hook-claude.sh"
           }
         ]
       }
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude-macropad/hook.sh"
+            "command": "$HOME/.ai-agent-macropad/hook-claude.sh"
           }
         ]
       }
@@ -60,7 +60,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude-macropad/hook.sh"
+            "command": "$HOME/.ai-agent-macropad/hook-claude.sh"
           }
         ]
       }
@@ -71,7 +71,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "MACROPAD_NOTIFICATION_TYPE=agent_needs_input $HOME/.claude-macropad/hook.sh"
+            "command": "MACROPAD_NOTIFICATION_TYPE=agent_needs_input $HOME/.ai-agent-macropad/hook-claude.sh"
           }
         ]
       },
@@ -80,7 +80,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "MACROPAD_NOTIFICATION_TYPE=idle_prompt $HOME/.claude-macropad/hook.sh"
+            "command": "MACROPAD_NOTIFICATION_TYPE=idle_prompt $HOME/.ai-agent-macropad/hook-claude.sh"
           }
         ]
       }
@@ -90,7 +90,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude-macropad/hook.sh"
+            "command": "$HOME/.ai-agent-macropad/hook-claude.sh"
           }
         ]
       }
@@ -101,7 +101,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude-macropad/hook.sh"
+            "command": "$HOME/.ai-agent-macropad/hook-claude.sh"
           }
         ]
       }
@@ -111,7 +111,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude-macropad/hook.sh"
+            "command": "$HOME/.ai-agent-macropad/hook-claude.sh"
           }
         ]
       }

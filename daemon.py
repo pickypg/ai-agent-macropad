@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Claude Code Macropad daemon.
+AI Agent Macropad daemon.
 
 Listens for hook events on a Unix socket, maintains the
 session_id -> pad slot mapping, and mirrors state to a QMK-based pad
@@ -19,8 +19,24 @@ crash, just logs what it *would* send) if no pad answers, so you can
 develop the socket/slot-mapping logic before any hardware is plugged
 in.
 
-The HID handle is only held open while at least one Claude Code
-session is active — see Daemon._reconcile_pad(). It's released
+The wire protocol (one JSON object per line on the Unix socket — see
+handle_hook_event() below) isn't tied to any one agent: any hook/
+notification source that speaks it can drive a slot, as long as its
+payload carries at least hook_event_name and session_id. Two adapters
+ship in this repo today, one per agent's own hook system —
+claude/hook.sh (Claude Code) and codex/hook.sh (Codex CLI) — both
+translating their agent's native hook JSON into this shape and
+forwarding it here; see the "Agents tested" table in the README for
+which agents actually have one. Each adapter tags its payload with an
+"agent" field (see Daemon.session_agents below) purely for logging/
+bookkeeping — it has no effect on how an event maps to a pad state.
+Claude Code's and Codex's hook event vocabularies overlap almost
+entirely (same event names, same core fields), so hook_to_state()
+below is shared rather than forked per agent; see its docstring for
+the handful of places they diverge.
+
+The HID handle is only held open while at least one agent session is
+active — see Daemon._reconcile_pad(). It's released
 IDLE_CLOSE_GRACE_SECONDS after the last session ends (and shortly
 after startup, if the daemon starts with none running), and reacquired
 lazily on the next SessionStart. This matters because the VIA app
@@ -40,7 +56,12 @@ agents --json` — see discover_running_sessions() and
 Daemon.seed_existing_sessions() below. Requires Claude Code >=2.1.224;
 an older CLI (or no `claude` on PATH) just means seeding finds nothing
 and pre-existing sessions fall back to the pre-existing
-lazy-allocation-on-first-hook-event behavior instead.
+lazy-allocation-on-first-hook-event behavior instead. This seeding
+path is Claude-Code-specific — there's no equivalent `codex agents
+--json` to seed pre-existing Codex sessions from, so those always
+start out via the lazy-allocation fallback in handle_hook_event()
+instead, same as any hook event that arrives before this daemon ever
+saw that session's SessionStart.
 """
 import asyncio
 import json
@@ -58,14 +79,15 @@ from pad_link import HidPadLink
 
 # --- Config ------------------------------------------------------------
 
-# Shared with hook.sh (which also drops itself here, see README's "Wire
-# up real Claude Code hooks" step) so everything the daemon owns on
-# disk lives under one directory instead of scattered directly in the
-# home directory. Created eagerly since a standalone daemon run (e.g.
-# via fake_hooks.py, before hook.sh has ever been copied anywhere) is
-# the first thing to need it, both for the socket bind below and for
-# the events-log handler created at import time further down.
-CONFIG_DIR = Path(os.path.expanduser("~/.claude-macropad"))
+# Shared with every agent's hook adapter (claude/hook.sh, codex/hook.sh
+# — each drops its own copy here, see README's "Wire up hooks" steps)
+# so everything the daemon owns on disk lives under one directory
+# instead of scattered directly in the home directory. Created eagerly
+# since a standalone daemon run (e.g. via fake_hooks.py, before any
+# hook script has been copied anywhere) is the first thing to need it,
+# both for the socket bind below and for the events-log handler
+# created at import time further down.
+CONFIG_DIR = Path(os.path.expanduser("~/.ai-agent-macropad"))
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 SOCKET_PATH = str(CONFIG_DIR / "daemon.sock")
@@ -106,10 +128,11 @@ events_log.addHandler(_events_handler)
 
 # --- Hook event -> pad state mapping (build brief §5) --------------------
 
-# Tools where Claude is blocked waiting on the user, but nothing has
-# gone wrong — distinct from an actual error, and distinct from a
-# generic "working" tool call. Notification's "waiting" (permission
-# prompts) stays separate too: those are lower-urgency than these.
+# Claude-Code-specific tool names for its two "blocked on a choice,
+# not just running a tool" builtins (plan-mode exit, the AskUserQuestion
+# tool). Codex has no matching tool names — a Codex tool call needing
+# attention still surfaces as "question" via PermissionRequest below,
+# it just won't get this earlier, more specific escalation.
 ATTENTION_TOOLS = {"AskUserQuestion", "ExitPlanMode"}
 
 
@@ -117,10 +140,27 @@ def hook_to_state(event_name, tool_name=None, notification_type=None):
     """Pad state a given hook event maps to, or None if this hook
     doesn't change display state by itself (e.g. SubagentStop).
 
+    Deliberately agent-agnostic: Claude Code and Codex CLI hooks both
+    use this same event vocabulary (SessionStart, UserPromptSubmit,
+    PreToolUse, PermissionRequest, PostToolUse, Stop, SubagentStop,
+    SessionEnd — confirmed against Codex's own hooks reference), so one
+    mapping table serves both rather than forking per agent. Two gaps
+    where they diverge, neither of which needs special-casing here —
+    they just never fire for Codex, and the pad quietly stays at
+    whatever state it was already in:
+      - PostToolUseFailure doesn't exist for Codex; a failed Codex tool
+        call is reported as a normal PostToolUse instead, so it maps to
+        "working" rather than "error" (no reliable field to tell success
+        from failure apart in that payload).
+      - Notification (and its agent_needs_input/idle_prompt subtypes,
+        Claude Code's own extension) has no Codex equivalent — Codex
+        tool calls needing your input surface only via PermissionRequest.
+
     AskUserQuestion and ExitPlanMode are special-cased: both are
     PreToolUse events, but both mean Claude is blocked on the user
     making a choice, not just "running a tool" — worth a visually
-    distinct (and blinking, on the pad side) state.
+    distinct (and blinking, on the pad side) state. Claude-Code-only —
+    see ATTENTION_TOOLS above.
 
     Notification is also special-cased by subtype: agent_needs_input
     means Claude is fully stalled until you answer, same urgency as
@@ -130,7 +170,8 @@ def hook_to_state(event_name, tool_name=None, notification_type=None):
     unreliable in practice (never fired for a real "Allow this
     command?" prompt, even on a current Claude Code version).
     PermissionRequest, handled separately below, is the working
-    replacement for that specific case.
+    replacement for that specific case, and — unlike Notification — is
+    shared with Codex.
     """
     if event_name == "PreToolUse" and tool_name in ATTENTION_TOOLS:
         return "question"
@@ -215,6 +256,11 @@ class SlotManager:
 # `claude` on PATH, or any parse failure just means an empty list,
 # same headless-friendly posture as pad discovery elsewhere in this
 # file.
+#
+# Claude-Code-specific: there's no equivalent CLI query for Codex (or
+# any other agent) sessions, so this only ever seeds Claude Code
+# sessions. A pre-existing Codex session just waits for its first real
+# hook event, same as every other lazy-allocation path in this file.
 
 def discover_running_sessions():
     try:
@@ -358,6 +404,15 @@ class Daemon:
         # Terminal.app tab this session is running in — an exact
         # match, unlike VS Code's fuzzy title substring match.
         self.session_ttys = {}
+        # session_id -> agent name (e.g. "claude-code", "codex"), from
+        # the payload's own "agent" field (each adapter script tags its
+        # own — see claude/hook.sh and codex/hook.sh). Bookkeeping only,
+        # for logs — it never affects slot allocation, state mapping, or
+        # what's sent to the pad, all of which are already agent-
+        # agnostic. Defaults to "claude-code" for payloads that predate
+        # this field, and for seed_existing_sessions() below, which is
+        # inherently Claude-Code-only (see discover_running_sessions()).
+        self.session_agents = {}
 
     def _send_pad(self, msg):
         """write_json(), plus remembering it in self.pad_state so
@@ -786,13 +841,20 @@ class Daemon:
         return True
 
     # host -> device: one line of raw hook JSON, piped straight through
-    # by hook.sh with no transformation. hook_event_name is provided by
-    # Claude Code itself in every event's payload (confirmed in the
-    # official hooks reference) — no need to inject it, unlike the
-    # brief's original jq one-liner assumed.
+    # by an agent's own hook adapter script with no transformation
+    # beyond that adapter's own enrichment (tmux_pane, controlling_tty,
+    # agent — see claude/hook.sh and codex/hook.sh). hook_event_name and
+    # session_id are provided by the agent itself in every event's
+    # payload (confirmed against both Claude Code's and Codex's own
+    # hooks references) — no need to inject either.
     def handle_hook_event(self, payload):
         event_name = payload.get("hook_event_name")
         session_id = payload.get("session_id")
+        # Bookkeeping only (see self.session_agents in __init__) — never
+        # used for mapping logic. Defaults to "claude-code" so payloads
+        # from before this field existed (or a hand-rolled test payload
+        # that omits it) still attribute sensibly.
+        agent = payload.get("agent", "claude-code")
 
         # Log every event unconditionally, before any mapping logic.
         # Without this, a Notification that arrives but maps to
@@ -801,8 +863,9 @@ class Daemon:
         # in the logs and have no way to tell "event never arrived"
         # apart from "event arrived but didn't map to a state change".
         log.info(
-            "hook event: %s (session=%s tool=%s notification_type=%s)",
+            "hook event: %s (agent=%s session=%s tool=%s notification_type=%s)",
             event_name,
+            agent,
             session_id,
             payload.get("tool_name"),
             payload.get("notification_type"),
@@ -822,6 +885,7 @@ class Daemon:
         if event_name == "SessionStart":
             i = self.slots.allocate(session_id)
             self._kick_reconcile()
+            self.session_agents[session_id] = agent
             pane = payload.get("tmux_pane")
             if pane:
                 self.session_panes[session_id] = pane
@@ -835,8 +899,8 @@ class Daemon:
                     {"t": "slot", "i": i, "state": "idle", "label": label}
                 )
                 events_log.info(
-                    "MAPPED slot=%s state=idle pane=%s tty=%s project=%s (SessionStart)",
-                    i, pane or "<none>", tty or "<none>", label,
+                    "MAPPED slot=%s state=idle agent=%s pane=%s tty=%s project=%s (SessionStart)",
+                    i, agent, pane or "<none>", tty or "<none>", label,
                 )
             return
 
@@ -847,6 +911,7 @@ class Daemon:
             self.session_panes.pop(session_id, None)
             self.session_ttys.pop(session_id, None)
             self.session_projects.pop(session_id, None)
+            self.session_agents.pop(session_id, None)
             if i is not None:
                 self._send_pad({"t": "clear", "i": i})
                 events_log.info("MAPPED slot=%s cleared (SessionEnd)", i)
@@ -872,6 +937,7 @@ class Daemon:
                 return
             label = Path(payload.get("cwd", "")).name or session_id[:8]
             self.session_projects[session_id] = label
+            self.session_agents[session_id] = agent
 
         # Backfill tmux_pane from whichever hook event happens to be the
         # first one this daemon process sees for the session, even if a
@@ -1045,6 +1111,10 @@ class Daemon:
                 continue
             label = Path(s.get("cwd", "")).name or session_id[:8]
             self.session_projects[session_id] = label
+            # Always "claude-code" — see discover_running_sessions()'s
+            # docstring for why this seeding path can't ever see a
+            # pre-existing session from another agent.
+            self.session_agents[session_id] = "claude-code"
 
             tty = None
             pid = s.get("pid")

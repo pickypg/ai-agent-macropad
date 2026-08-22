@@ -23,13 +23,14 @@ small source patch applied before it'll build; see [QMK keyboard
 (Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified)
 before relying on it.
 
-This repo covers the full path end to end: an example Claude Code
-`settings.json` wiring plus the hook script it invokes, a host-side
-daemon that speaks a small binary protocol with the pad over USB HID,
-and the QMK keymap C that runs on the pad itself.
+This repo covers the full path end to end: per-agent hook wiring (an
+example settings file plus the adapter script it invokes — one pair
+per agent, under `claude/` and `codex/`), a host-side daemon that
+speaks a small binary protocol with the pad over USB HID, and the QMK
+keymap C that runs on the pad itself.
 
 The daemon only holds the pad's HID connection open while at least one
-Claude Code session is active, releasing it shortly after the last one
+agent session is active, releasing it shortly after the last one
 ends — see [Run the daemon](#2-run-the-daemon) — so the [VIA
 app](https://www.caniusevia.com/), which needs exclusive access to
 that same interface, can be used without manually stopping the daemon
@@ -40,12 +41,13 @@ first.
 The pad's hardware, HID protocol, and daemon core don't assume any
 particular agent — but wiring one up still means writing the piece
 that turns its own event stream into hook payloads on
-`~/.claude-macropad/daemon.sock` (see [Protocol](#protocol) below).
-Only one agent has that piece written so far:
+`~/.ai-agent-macropad/daemon.sock` (see [Protocol](#protocol) below).
+Two agents have that piece written so far:
 
 | Agent                                          | Status     | Notes                                                                                 |
 | ----------------------------------------------- | ---------- | -------------------------------------------------------------------------------------- |
 | [Claude Code](https://claude.com/claude-code)   | ✅ Tested  | Wired via Claude Code's own hooks — see [`claude/example_hook_settings.json`](claude/example_hook_settings.json) and [`claude/hook.sh`](claude/hook.sh) |
+| [Codex CLI](https://developers.openai.com/codex) | ✅ Tested | Wired via Codex's own hooks (near-identical event vocabulary to Claude Code's) — see [`codex/example_hooks.json`](codex/example_hooks.json) and [`codex/hook.sh`](codex/hook.sh). Verified end to end with a real `codex exec` run; see [Wire up Codex hooks](#wire-up-codex-hooks) for the two gaps versus Claude Code (no `PostToolUseFailure` or `Notification` equivalent) |
 
 Update this table as support for other agents is added.
 
@@ -57,13 +59,13 @@ Each slot's RGB color reflects that session's current state, per
 |     | Label        | Color                      | Internal state | When                                                                                                           |
 | --- | ------------ | --------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------- |
 | ⚪  | idle         | dim gray `#282828`         | `idle`         | `SessionStart` — slot allocated, nothing happening yet                                                        |
-| 🔵  | thinking     | blue `#0000FF`              | `working`      | Claude is reasoning between tool calls (`UserPromptSubmit`, `PostToolUse`)                                    |
+| 🔵  | thinking     | blue `#0000FF`              | `working`      | The agent is reasoning between tool calls (`UserPromptSubmit`, `PostToolUse`)                                 |
 | 🟣  | tool running | purple `#8000FF`            | `tool_running` | A tool call is actively executing (`PreToolUse`)                                                              |
-| 🟢  | complete     | green `#00FF00`            | `done`         | `Stop` — Claude finished responding                                                                           |
+| 🟢  | complete     | green `#00FF00`            | `done`         | `Stop` — the agent finished responding                                                                        |
 | 🟠  | needs input  | orange `#FF7F00`, blinking | `question`     | Blocked on you: `AskUserQuestion`, `ExitPlanMode`, `PermissionRequest`, or `Notification:agent_needs_input`   |
 | 🟣  | tool stalled | purple `#8000FF`, blinking | `tool_stalled` | A tool call has been pending past `STALL_THRESHOLD_SECONDS` with no `PostToolUse` — may or may not be blocked |
-| 🟡  | waiting      | amber `#FFAA00`             | `waiting`      | Claude's been idle 60s+ with nothing blocking (`Notification:idle_prompt`) — lower urgency than "needs input" |
-| 🔴  | error        | red `#FF0000`              | `error`        | `PostToolUseFailure`                                                                                           |
+| 🟡  | waiting      | amber `#FFAA00`             | `waiting`      | Claude Code's been idle 60s+ with nothing blocking (`Notification:idle_prompt`) — lower urgency than "needs input"; Claude-Code-only, see [Agents tested](#agents-tested) |
+| 🔴  | error        | red `#FF0000`              | `error`        | `PostToolUseFailure` — Claude-Code-only; Codex has no equivalent, see [Agents tested](#agents-tested)          |
 
 "needs input" and "tool stalled" blink (0.5s on/off) so each reads as
 distinct from its solid-color sibling at a glance — "needs input" from
@@ -93,27 +95,30 @@ been tried.
 | `daemon.py`                         | Host-side daemon: Unix socket server + hook-event → pad-state mapping + idle-release orchestration        |
 | `pad_link.py`                       | Owns the HID connection to the pad: discovery, open/close, read/write, reconnection                       |
 | `hid_protocol.py`                   | Wire-level binary report format for the HID transport (QMK-based pads) — see [Protocol](#protocol)        |
-| `fake_hooks.py`                     | Simulates a Claude Code session's hook events, for testing the daemon without real hooks wired up         |
+| `fake_hooks.py`                     | Simulates an agent session's hook events (Claude Code by default, `--agent codex` for Codex's own event shape), for testing the daemon without real hooks wired up |
 | `hid_bringup_test.py`               | Standalone hello/RGB round-trip check against a real QMK pad, independent of `daemon.py`                  |
 | `qmk-userspace/`                    | QMK userspace overlay, built against a separate local QMK checkout — `users/ai_agent_macropad/` holds the protocol/state logic shared by every board's keymap; `keyboards/.../keymaps/ai_agent_macropad/` holds each board's own layout, LED map, and device ID. Keychron K1 Pro also ships `keyboards/keychron/k1_pro/k1_pro.c.patch`, a small patch applied to that board's own (unmodified-otherwise) firmware checkout — see [QMK keyboard (Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified) for why |
 | `requirements.txt`                  | Python dependencies for the daemon                                                                        |
 | `requirements-dev.txt`              | Adds `pytest` on top of `requirements.txt`, for running the test suite                                    |
 | `tests/`                            | `pytest` suite for `daemon.py`, `pad_link.py`, and `hid_protocol.py` (see [Testing](#testing))             |
-| `claude/example_hook_settings.json` | `hooks` block to merge into `settings.json`, wiring every relevant event to `hook.sh`                     |
-| `claude/hook.sh`                    | Reads a hook payload from stdin, enriches it, and forwards it to the daemon's socket                      |
+| `claude/example_hook_settings.json` | `hooks` block to merge into Claude Code's `settings.json`, wiring every relevant event to `hook.sh`        |
+| `claude/hook.sh`                    | Reads a Claude Code hook payload from stdin, enriches it, tags it `agent: claude-code`, and forwards it to the daemon's socket |
+| `codex/example_hooks.json`          | `hooks` block for Codex CLI's `hooks.json`/`config.toml`, wiring every relevant event to `hook.sh`         |
+| `codex/hook.sh`                     | Same idea as `claude/hook.sh`, for Codex's own (near-identical) hook payload shape — tags it `agent: codex` |
 
 ## How it fits together
 
 ```
-Claude Code hooks --> hook.sh -->   daemon.py    <-- USB HID --> QMK keyboard
-                                  (Unix socket)
+Claude Code hooks --> claude/hook.sh --\
+                                         >-   daemon.py    <-- USB HID --> QMK keyboard
+       Codex hooks --> codex/hook.sh --/    (Unix socket)
 ```
 
-`daemon.py` listens on a Unix domain socket at `~/.claude-macropad/daemon.sock`
-for line-delimited JSON hook payloads, maps each one to a display state
-for the originating session, and pushes that state to the pad over USB
-HID. It also reads events back from the pad (key presses) and
-dispatches them.
+`daemon.py` listens on a Unix domain socket at `~/.ai-agent-macropad/daemon.sock`
+for line-delimited JSON hook payloads from any agent's adapter script,
+maps each one to a display state for the originating session, and
+pushes that state to the pad over USB HID. It also reads events back
+from the pad (key presses) and dispatches them.
 
 ## Hardware
 
@@ -193,7 +198,7 @@ same raw HID interface (our protocol deliberately shares VIA's endpoint rather t
 separate one), and macOS enforces exclusive access to it at the OS level — whichever one opens
 it first locks the other out, and VIA will report the keyboard as "not responding like a
 VIA-enabled keyboard" if it loses that race. The daemon only holds the interface open while at
-least one Claude Code session is active (see [Run the daemon](#2-run-the-daemon)), releasing it
+least one agent session is active (see [Run the daemon](#2-run-the-daemon)), releasing it
 a few seconds after the last one ends — so in practice this just means: **open VIA while no
 session is running**, or wait a few seconds after your last session ends. If VIA still reports
 the keyboard as unresponsive, the daemon likely has an active session and hasn't released the
@@ -315,7 +320,7 @@ _would_ send instead of writing to the device. This lets you develop
 against the socket/slot-mapping logic without any hardware plugged in.
 
 The daemon only holds the pad connection open while at least one
-Claude Code session is active (`Daemon._reconcile_pad()` in
+agent session is active (`Daemon._reconcile_pad()` in
 `daemon.py`) — it's released `IDLE_CLOSE_GRACE_SECONDS` (5s by
 default) after the last session ends, or shortly after startup if the
 daemon starts with none running, and reacquired lazily on the next
@@ -339,60 +344,74 @@ slot left glowing by a session that died without a clean `SessionEnd`
 properly) doesn't linger forever; the pad has no way to know the old
 daemon process is gone, so nothing else would ever revisit that slot
 otherwise (see `Daemon.seed_existing_sessions()` in `daemon.py`).
+This seeding path is Claude-Code-specific — there's no equivalent
+`codex agents --json` — so a pre-existing Codex session just falls
+back to the same lazy-allocation-on-first-hook-event behavior as
+everything else.
 
 ### 3. Try it without real hooks
 
 To exercise the daemon before wiring up real hooks (or anytime you don't
-have a live Claude Code session handy), use `fake_hooks.py` to simulate
+have a live agent session handy), use `fake_hooks.py` to simulate
 a session's hook lifecycle against a running daemon:
 
 ```
-python3 fake_hooks.py                # one simulated session
-python3 fake_hooks.py --sessions 3   # three concurrent sessions, staggered
+python3 fake_hooks.py                        # one simulated Claude Code session
+python3 fake_hooks.py --sessions 3           # three concurrent sessions, staggered
+python3 fake_hooks.py --agent codex          # simulate a Codex CLI session instead
 ```
 
 Each run walks through `SessionStart` → prompt → tool calls (including
-one that should light the slot up as "question", e.g. `AskUserQuestion`)
-→ `Stop` → `SessionEnd`, with pauses in between so you can watch the pad
-react in real time.
+one that should light the slot up as "question" — `AskUserQuestion` for
+Claude Code, `PermissionRequest` for Codex) → `Stop` → `SessionEnd`,
+with pauses in between so you can watch the pad react in real time.
 
-### 4. Wire up real Claude Code hooks
+### 4. Wire up hooks
 
-1. Copy the script and make it executable. `daemon.py` also creates this
-   directory itself on startup (it hosts `daemon.sock` and `events.log`
-   too), so this step just needs to happen before the first real hook
-   fires:
+Each agent needs its own copy of this daemon's config directory and
+its own hook adapter script — `daemon.py` creates the directory itself
+on startup (it hosts `daemon.sock` and `events.log` too), so this step
+just needs to happen before the first real hook fires:
+
+```
+mkdir -p "$HOME/.ai-agent-macropad"
+```
+
+Both adapter scripts below need `jq` and a `nc` build that supports
+Unix-domain sockets (`-U`, e.g. macOS's built-in `nc`) on `PATH`.
+
+#### Wire up Claude Code hooks
+
+1. Copy the script and make it executable:
 
    ```
-   mkdir -p "$HOME/.claude-macropad"
-   cp claude/hook.sh "$HOME/.claude-macropad/hook.sh"
-   chmod +x "$HOME/.claude-macropad/hook.sh"
+   cp claude/hook.sh "$HOME/.ai-agent-macropad/hook-claude.sh"
+   chmod +x "$HOME/.ai-agent-macropad/hook-claude.sh"
    ```
-
-   It needs `jq` and a `nc` build that supports Unix-domain sockets
-   (`-U`, e.g. macOS's built-in `nc`) on `PATH`.
 
 2. Merge the `"hooks"` block from
    [`claude/example_hook_settings.json`](claude/example_hook_settings.json)
    into your Claude Code `settings.json` (global `~/.claude/settings.json`
    or a project's `.claude/settings.json`). It registers
-   `$HOME/.claude-macropad/hook.sh` as a command hook for every event
-   `handle_hook_event()` cares about (`SessionStart`, `UserPromptSubmit`,
-   `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`,
-   `Notification`, `Stop`, `SubagentStop`, `SessionEnd`). The
-   `Notification` entries split on `matcher` (`agent_needs_input` vs.
-   `idle_prompt`) and pass `MACROPAD_NOTIFICATION_TYPE` as an env var,
-   since that's the reliable way to know which subtype fired for a given
-   invocation (`Notification:permission_prompt` itself is not wired up —
-   see [`hook_to_state`'s
-   docstring](daemon.py) for why).
+   `$HOME/.ai-agent-macropad/hook-claude.sh` as a command hook for every
+   event `handle_hook_event()` cares about (`SessionStart`,
+   `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`,
+   `PostToolUseFailure`, `Notification`, `Stop`, `SubagentStop`,
+   `SessionEnd`). The `Notification` entries split on `matcher`
+   (`agent_needs_input` vs. `idle_prompt`) and pass
+   `MACROPAD_NOTIFICATION_TYPE` as an env var, since that's the reliable
+   way to know which subtype fired for a given invocation
+   (`Notification:permission_prompt` itself is not wired up — see
+   [`hook_to_state`'s docstring](daemon.py) for why).
 
 [`claude/hook.sh`](claude/hook.sh) reads the hook's JSON payload from
 stdin (Claude Code already includes `hook_event_name` and `session_id`
-in it) and forwards it to `~/.claude-macropad/daemon.sock` via `nc -U`, after
-using `jq` to fill in a few fields the payload doesn't reliably carry on
-its own:
+in it) and forwards it to `~/.ai-agent-macropad/daemon.sock` via `nc -U`,
+after using `jq` to fill in a few fields the payload doesn't reliably
+carry on its own:
 
+- `agent`, always `"claude-code"` — bookkeeping only (see
+  `Daemon.session_agents` in `daemon.py`), doesn't affect state mapping.
 - `notification_type`, from the `MACROPAD_NOTIFICATION_TYPE` env var set
   by the matcher branch in `settings.json`.
 - `tmux_pane`, from the script's own `$TMUX_PANE` (empty if not running
@@ -406,6 +425,56 @@ It fails open by design (redirects `nc`'s output away, always exits 0)
 so a daemon that isn't running never blocks a tool call or a session,
 and caps the socket write at one second so `PreToolUse`/`PostToolUse` —
 which fire on every tool call — stay fast.
+
+#### Wire up Codex hooks
+
+Codex CLI's own hooks system (distinct from its older, more limited
+`notify` config key) turns out to use almost the exact same event
+vocabulary as Claude Code's — same event names (`SessionStart`,
+`UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`,
+`Stop`, `SubagentStop`, `SessionEnd`), same delivery (JSON on stdin),
+and even the same `hooks.json` schema shape — so `codex/hook.sh` is
+almost identical to `claude/hook.sh`; see its comments for the couple
+of places they diverge, and [`hook_to_state`'s
+docstring](daemon.py) for what that means for pad states.
+
+1. Copy the script and make it executable:
+
+   ```
+   cp codex/hook.sh "$HOME/.ai-agent-macropad/hook-codex.sh"
+   chmod +x "$HOME/.ai-agent-macropad/hook-codex.sh"
+   ```
+
+2. Wire up the `"hooks"` block from
+   [`codex/example_hooks.json`](codex/example_hooks.json), which points
+   every relevant event at `$HOME/.ai-agent-macropad/hook-codex.sh`.
+   Codex discovers hooks from `~/.codex/hooks.json`,
+   `~/.codex/config.toml`'s inline `[hooks]` tables, or the equivalent
+   pair inside a project's own `.codex/` — see [Codex's hooks
+   reference](https://developers.openai.com/codex/hooks) for the exact
+   `hooks.json` vs. `config.toml` syntax. **What was actually verified
+   working here** (real `codex exec` run, `codex-cli 0.149.0`) was the
+   global `~/.codex/config.toml` inline-table form — a project-local
+   `.codex/hooks.json` did not fire in that same version despite
+   matching Codex's documented format, so if hooks silently don't fire
+   for you, try `config.toml` before assuming something else is wrong.
+
+3. **New hooks need to be trusted before Codex will run them** — the
+   first time, an interactive `codex` session prompts you to review and
+   trust them. For non-interactive use (`codex exec`, scripts, CI),
+   pass `--dangerously-bypass-hook-trust` instead — as the name warns,
+   only do this for hook sources you already trust (i.e. `codex/hook.sh`
+   as shipped in this repo, not an arbitrary command).
+
+Known gaps versus Claude Code (see `hook_to_state`'s docstring in
+`daemon.py` for the full reasoning): Codex has no `PostToolUseFailure`
+event, so a failed Codex tool call still reports as a normal
+`PostToolUse` (state stays `working`, never `error`) — there's no
+reliable field in that payload to tell success from failure apart.
+Codex also has no `Notification` event, so the `waiting` (idle 60s+)
+state never fires for a Codex session — only Claude Code has an
+equivalent. Everything else, including `PermissionRequest` -> `question`,
+works the same as Claude Code.
 
 ## Testing
 
@@ -446,22 +515,30 @@ stands in for it):
   and staying open if a new session starts before that delay elapses)
   is tested in `tests/test_pad_idle_release.py` against a fake pad
   that just tracks open()/close() calls.
+- Codex-shaped hook payloads (real field names and values, including
+  its `tool_name: "Bash"` for shell calls — confirmed live, not
+  guessed) are exercised in `tests/test_codex_hook_mapping.py`, mostly
+  as regression insurance that `hook_to_state()` stays agent-agnostic
+  rather than re-testing mapping rules already covered elsewhere.
 
 ## Protocol
 
 ### Hook events in (socket → daemon)
 
-Each line written to `~/.claude-macropad/daemon.sock` is a single JSON object
-with (at minimum) `hook_event_name` and `session_id`, matching the shape
-of a Claude Code hook payload. Recognized fields:
+Each line written to `~/.ai-agent-macropad/daemon.sock` is a single JSON
+object with (at minimum) `hook_event_name` and `session_id` — this
+shape isn't specific to any one agent, just to whichever adapter script
+produced it (see [Agents tested](#agents-tested) and [How it fits
+together](#how-it-fits-together)). Recognized fields:
 
 | Field               | Used for                                                                                                         |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `hook_event_name`   | Selects the resulting pad state (see below)                                                                      |
 | `session_id`        | Identifies which pad slot this event belongs to                                                                  |
+| `agent`             | Which agent sent this (`"claude-code"`, `"codex"`) — bookkeeping/logging only, doesn't affect state mapping; defaults to `"claude-code"` if absent |
 | `cwd`               | Project folder name — used for VS Code/IntelliJ window-dispatch matching (QMK pads are RGB-only, no on-device label) |
 | `tool_name`         | Distinguishes attention-worthy tools (`AskUserQuestion`, `ExitPlanMode`) and labels the slot during `PreToolUse` |
-| `notification_type` | Distinguishes `Notification` subtypes (`agent_needs_input`, `idle_prompt`, ...)                                  |
+| `notification_type` | Distinguishes `Notification` subtypes (`agent_needs_input`, `idle_prompt`, ...) — Claude-Code-only, see [Agents tested](#agents-tested) |
 | `tmux_pane`         | tmux pane id, for the "bring to front" key-press dispatch                                                        |
 | `controlling_tty`   | Terminal.app tty, for the same dispatch when not in tmux                                                         |
 
@@ -472,12 +549,19 @@ of a Claude Code hook payload. Recognized fields:
 | `SessionStart`                                                             | `idle`         |
 | `UserPromptSubmit`, `PostToolUse`                                          | `working`      |
 | `PreToolUse` (generic tool)                                                | `tool_running` |
-| `PreToolUse` with `AskUserQuestion`/`ExitPlanMode`, or `PermissionRequest` | `question`     |
-| `PostToolUseFailure`                                                       | `error`        |
+| `PreToolUse` with `AskUserQuestion`/`ExitPlanMode` (Claude-Code-only), or `PermissionRequest` | `question` |
+| `PostToolUseFailure` (Claude-Code-only — no Codex equivalent)              | `error`        |
 | `Stop`                                                                     | `done`         |
-| `Notification` (`agent_needs_input`)                                       | `question`     |
-| `Notification` (`idle_prompt`)                                             | `waiting`      |
+| `Notification` (`agent_needs_input`) — Claude-Code-only                    | `question`     |
+| `Notification` (`idle_prompt`) — Claude-Code-only                          | `waiting`      |
 | `SessionEnd`                                                               | slot cleared   |
+
+Claude Code and Codex CLI send this same `hook_event_name` vocabulary
+(confirmed against both agents' own hooks references, and — for
+Codex — against real hook payloads captured from a live `codex exec`
+run), so `hook_to_state()` in `daemon.py` is shared rather than forked
+per agent. The rows marked Claude-Code-only above are the only places
+they diverge; every other row applies to both agents identically.
 
 A `PreToolUse` with no matching `PostToolUse`/`PostToolUseFailure` within
 `STALL_THRESHOLD_SECONDS` (default 10s) is escalated to `tool_stalled`
@@ -544,22 +628,23 @@ via AppleScript, so this is macOS-only for now.
 ## Logs
 
 - Console: human-readable, `INFO` level.
-- `~/.claude-macropad/events.log`: rotating (5MB × 3 files) raw event
+- `~/.ai-agent-macropad/events.log`: rotating (5MB × 3 files) raw event
   log — every socket line (parsed or not), every state mapping decision,
   and every window-dispatch attempt/result. Useful for diagnosing a
   framing or mapping bug after the fact without reproducing it live.
 
 ## Status
 
-This is early-stage, but the path from a real Claude Code session to the
+This is early-stage, but the path from a real agent session to the
 pad now works end to end:
 
 - ✅ Claude Code hook wiring (`settings.json` block + `hook.sh`)
-- ✅ Socket server + hook-event → pad-state mapping
+- ✅ Codex CLI hook wiring (`hooks.json`/`config.toml` block + `hook.sh`), verified with a real `codex exec` run
+- ✅ Socket server + hook-event → pad-state mapping, shared across agents
 - ✅ HID protocol to/from QMK keyboards (e.g. NuPhy Air75 V2), with pad auto-discovery
-- ✅ Slot allocation for concurrent sessions
+- ✅ Slot allocation for concurrent sessions (any mix of agents)
 - ✅ Key-press → bring-window-to-front dispatch (macOS)
-- ✅ Startup seeding of already-running sessions (`claude agents --json`)
+- ✅ Startup seeding of already-running sessions (`claude agents --json`) — Claude-Code-only, see [Agents tested](#agents-tested)
 - ✅ Idle-release: the pad connection closes when no session is active, freeing it for VIA
 - ⚠️ Keychron K1 Pro (ANSI) QMK keymap — written against Keychron's own official firmware
   source, unverified on real hardware (see [QMK keyboard (Keychron K1 Pro,

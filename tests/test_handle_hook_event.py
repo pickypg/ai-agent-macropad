@@ -55,6 +55,7 @@ def test_session_end_frees_slot_and_sends_clear(recording_daemon):
     # session bookkeeping is cleared too, not just the slot
     assert "s1" not in d.session_projects
     assert "s1" not in d.pending_calls
+    assert "s1" not in d.session_agents
 
 
 def test_event_missing_session_id_is_dropped(recording_daemon):

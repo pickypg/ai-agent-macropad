@@ -116,6 +116,9 @@ def test_seed_existing_sessions_allocates_slots_and_sends_idle(recording_daemon,
     assert d.slots.slot_for("sa") == 0
     assert d.slots.slot_for("sb") == 1
     assert d.session_projects == {"sa": "proj-a", "sb": "proj-b"}
+    # This seeding path can only ever see Claude Code sessions — see
+    # discover_running_sessions()'s docstring
+    assert d.session_agents == {"sa": "claude-code", "sb": "claude-code"}
     # The two real sessions get idle; every other slot this daemon
     # process didn't just claim gets explicitly cleared to off, so a
     # slot left glowing by a dead session/previous daemon run doesn't
