@@ -17,6 +17,13 @@ static uint8_t slot_states[AI_AGENT_MACROPAD_MAX_SLOTS];
 // which one populated it.
 static uint8_t slot_led[AI_AGENT_MACROPAD_MAX_SLOTS];
 
+// slot index -> timer_read() at the most recent press of that slot's key.
+// key_hold_pending mirrors it: true from press until either the hold
+// threshold fires (ai_agent_macropad_task()) or the key is released,
+// whichever comes first — see both for how they use it together.
+static uint16_t key_down_time[AI_AGENT_MACROPAD_MAX_SLOTS];
+static bool     key_hold_pending[AI_AGENT_MACROPAD_MAX_SLOTS];
+
 void ai_agent_macropad_init(uint8_t num_slots, const uint8_t *slot_to_led) {
     for (uint8_t i = 0; i < num_slots && i < AI_AGENT_MACROPAD_MAX_SLOTS; i++) {
         slot_states[i] = STATE_OFF;
@@ -100,13 +107,44 @@ bool ai_agent_macropad_process_record(uint16_t keycode, keyrecord_t *record, uin
     // never typed. Slot index is the keycode's position past
     // slot_key_base, valid since the keymap's AI_AGENT_KEY_* enum
     // values are sequential starting there.
+    uint8_t index = keycode - slot_key_base;
+
     if (record->event.pressed) {
         uint8_t report[AI_AGENT_MACROPAD_REPORT_SIZE] = {0};
         report[0] = MSG_KEY;
-        report[1] = keycode - slot_key_base;
+        report[1] = index;
         raw_hid_send(report, sizeof(report));
+        if (index < AI_AGENT_MACROPAD_MAX_SLOTS) {
+            key_down_time[index]   = timer_read();
+            key_hold_pending[index] = true;
+        }
+    } else if (index < AI_AGENT_MACROPAD_MAX_SLOTS) {
+        // Released before crossing the hold threshold (the common,
+        // tap case) — ai_agent_macropad_task() already stops checking
+        // once it fires MSG_KEY_HELD, but a tap never reaches that
+        // point at all, so this just cancels the pending check.
+        key_hold_pending[index] = false;
     }
     return false;
+}
+
+// Call from matrix_scan_user() (every board using this protocol wires
+// this in) — continuously polls every currently-held slot key so a
+// hold fires MSG_KEY_HELD the instant it crosses the threshold, rather
+// than waiting for key-up. Each key fires at most once per press:
+// key_hold_pending is cleared the moment it does, or on release,
+// whichever happens first.
+void ai_agent_macropad_task(uint8_t num_slots) {
+    for (uint8_t i = 0; i < num_slots && i < AI_AGENT_MACROPAD_MAX_SLOTS; i++) {
+        if (!key_hold_pending[i]) continue;
+        if (timer_elapsed(key_down_time[i]) < AI_AGENT_MACROPAD_HOLD_THRESHOLD_MS) continue;
+
+        key_hold_pending[i] = false;
+        uint8_t report[AI_AGENT_MACROPAD_REPORT_SIZE] = {0};
+        report[0] = MSG_KEY_HELD;
+        report[1] = i;
+        raw_hid_send(report, sizeof(report));
+    }
 }
 
 // Host -> device: MSG_PING replies with MSG_HELLO (daemon's

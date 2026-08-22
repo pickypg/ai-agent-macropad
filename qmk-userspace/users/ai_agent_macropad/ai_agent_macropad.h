@@ -19,6 +19,13 @@
 // for a denser board later.
 #define AI_AGENT_MACROPAD_MAX_SLOTS 12
 
+// How long a slot key must stay held (ms) before MSG_KEY_HELD fires —
+// see ai_agent_macropad_task(). Deliberately generous: this manually
+// evicts whatever session is mapped to the slot, so it needs to be
+// long enough that an ordinary firm tap can never trigger it by
+// accident.
+#define AI_AGENT_MACROPAD_HOLD_THRESHOLD_MS 5000
+
 // Message types — must match hid_protocol.py.
 //
 // MSG_SLOT/MSG_PING/MSG_KEY live at 0x20+ deliberately: 0x01-0x15 is
@@ -36,10 +43,11 @@
 // 0xA1 ("AI") is distinctive enough that a collision would mean
 // something is actually wrong (and is well clear of VIA's range too).
 enum ai_agent_macropad_msg {
-    MSG_HELLO = 0xA1,
-    MSG_SLOT  = 0x20,
-    MSG_PING  = 0x21,
-    MSG_KEY   = 0x22,
+    MSG_HELLO    = 0xA1,
+    MSG_SLOT     = 0x20,
+    MSG_PING     = 0x21,
+    MSG_KEY      = 0x22,
+    MSG_KEY_HELD = 0x23,
 };
 
 // Pad states — must match hid_protocol.py's STATE_* values 1:1 (same
@@ -87,6 +95,15 @@ void ai_agent_macropad_init(uint8_t num_slots, const uint8_t *slot_to_led);
 // otherwise — pass that straight back as process_record_user's return
 // value.
 bool ai_agent_macropad_process_record(uint16_t keycode, keyrecord_t *record, uint16_t slot_key_base, uint8_t num_slots);
+
+// Call from matrix_scan_user() — unconditionally, every scan, cheap
+// (just a timer comparison per currently-held slot key). Fires
+// MSG_KEY_HELD as soon as a held key crosses
+// AI_AGENT_MACROPAD_HOLD_THRESHOLD_MS, without waiting for release —
+// deliberately not tied to the RGB matrix task (unlike
+// ai_agent_macropad_paint_indicators() below), so this still works if
+// RGB is toggled off, same as every other message this protocol sends.
+void ai_agent_macropad_task(uint8_t num_slots);
 
 #ifdef VIA_ENABLE
 // VIA_ENABLE-only: (re)builds the slot -> LED table from scratch by

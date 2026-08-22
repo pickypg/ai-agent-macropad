@@ -127,6 +127,43 @@ def test_key_press_out_of_range_index_is_ignored(recording_daemon):
     assert sent == []
 
 
+# --- on_device_event: key_held routing (manual slot eviction) -----------
+
+
+def test_key_held_on_mapped_slot_clears_it_and_forgets_the_session(recording_daemon):
+    d, sent = recording_daemon
+    d.slots.allocate("s1")  # occupies slot 0
+    d.session_agents["s1"] = "claude-code"
+    d.session_panes["s1"] = "%3"
+    d.session_ttys["s1"] = "/dev/ttys003"
+    d.session_projects["s1"] = "my-project"
+    d.pending_calls["s1"] = {"tool_name": "Bash"}
+
+    d.on_device_event({"t": "key_held", "i": 0})
+
+    assert sent == [{"t": "clear", "i": 0}]
+    assert d.slots.slot_for("s1") is None
+    assert "s1" not in d.session_agents
+    assert "s1" not in d.session_panes
+    assert "s1" not in d.session_ttys
+    assert "s1" not in d.session_projects
+    assert "s1" not in d.pending_calls
+    # slot is free again for a new session
+    assert d.slots.allocate("s2") == 0
+
+
+def test_key_held_on_empty_slot_still_clears_the_pad(recording_daemon):
+    d, sent = recording_daemon
+    d.on_device_event({"t": "key_held", "i": 0})
+    assert sent == [{"t": "clear", "i": 0}]
+
+
+def test_key_held_out_of_range_index_is_ignored(recording_daemon):
+    d, sent = recording_daemon
+    d.on_device_event({"t": "key_held", "i": 999})
+    assert sent == []
+
+
 def test_encoder_and_click_events_do_not_raise(recording_daemon):
     d, _ = recording_daemon
     d.on_device_event({"t": "enc", "d": 1})

@@ -263,6 +263,20 @@ class SlotManager:
                 self.slot_to_session[i] = None
             return i
 
+    def evict(self, index):
+        """Index-keyed mirror of free() — clears whatever session
+        currently occupies `index` (if any) and returns its session_id,
+        or None if the slot was already empty. Used for manual eviction
+        (hold-to-clear a key), where the daemon knows the slot the user
+        acted on but not, up front, which session_id occupies it.
+        """
+        with self.lock:
+            session_id = self.slot_to_session[index]
+            if session_id is not None:
+                self.slot_to_session[index] = None
+                self.session_to_slot.pop(session_id, None)
+            return session_id
+
     def slot_for(self, session_id):
         with self.lock:
             return self.session_to_slot.get(session_id)
@@ -603,7 +617,7 @@ class Daemon:
 
     # device -> host: keypress events from the pad.
     #
-    # A key press does exactly one thing — bring that session's window
+    # A tap ("key") does exactly one thing — bring that session's window
     # to the front. Dispatch mechanisms, tried in order:
     #   1. tmux select-window, if a pane was recorded for this session
     #   2. Terminal.app tab activation, matched by exact controlling
@@ -613,6 +627,10 @@ class Daemon:
     #   4. IntelliJ IDEA window activation, same project-name match —
     #      tried after VS Code since both are gated on the same
     #      `project` value and either/neither may actually be running
+    #
+    # A hold ("key_held") does the opposite — it manually clears
+    # whatever session is mapped to that slot (see _evict_slot() below),
+    # for a stale mapping nothing else would ever free.
     def on_device_event(self, msg):
         t = msg.get("t")
         if t == "key":
@@ -631,8 +649,33 @@ class Daemon:
                     self._send_pad({"t": "clear", "i": i})
                 return
             self.dispatch_bring_to_front(i, session_id)
+        elif t == "key_held":
+            i = msg.get("i")
+            if i is not None and i < self.slots.num_slots:
+                self._evict_slot(i)
         else:
             log.info("unhandled device event: %s", msg)
+
+    def _evict_slot(self, i):
+        """Manually clear slot `i`'s session mapping — fired by a held
+        key (see MSG_KEY_HELD in hid_protocol.py), for a slot whose
+        session is stale (e.g. a duplicate VS Code session, or one that
+        ended without a clean SessionEnd) and stuck occupying a slot no
+        session can otherwise reclaim. Mirrors SessionEnd's cleanup
+        (handle_hook_event() above) exactly, but keyed off the slot
+        index rather than a session_id from a hook payload.
+        """
+        session_id = self.slots.evict(i)
+        if session_id is not None:
+            self.pending_calls.pop(session_id, None)
+            self.session_panes.pop(session_id, None)
+            self.session_ttys.pop(session_id, None)
+            self.session_projects.pop(session_id, None)
+            self.session_agents.pop(session_id, None)
+        self._send_pad({"t": "clear", "i": i})
+        events_log.info(
+            "MAPPED slot=%s cleared (ManualEvict session=%s)", i, session_id
+        )
 
     def dispatch_bring_to_front(self, slot, session_id):
         pane = self.session_panes.get(session_id)

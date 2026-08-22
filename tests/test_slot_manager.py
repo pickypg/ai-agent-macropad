@@ -33,3 +33,16 @@ def test_slot_for_reflects_current_mapping():
     assert slots.slot_for("a") == 0
     slots.free("a")
     assert slots.slot_for("a") is None
+
+
+def test_evict_clears_an_occupied_slot_and_returns_its_session():
+    slots = daemon.SlotManager(2)
+    slots.allocate("a")
+    assert slots.evict(0) == "a"
+    assert slots.slot_for("a") is None
+    assert slots.allocate("b") == 0  # slot is free again
+
+
+def test_evict_empty_slot_is_a_noop():
+    slots = daemon.SlotManager(2)
+    assert slots.evict(0) is None

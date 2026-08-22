@@ -32,10 +32,18 @@ MSG_SLOT   (host -> device): byte 1 = slot index, byte 2 = state
             too — they just don't need a separate wire *message
             type*, since there's no label to clear on an RGB-only pad,
             only a color.
-MSG_KEY    (device -> host): byte 1 = slot index. Sent only on
-            key-down, mirroring the firmware's own key-event handling.
-            There is no key-up report; on_device_event() has no
-            key-up concept to consume one anyway.
+MSG_KEY    (device -> host): byte 1 = slot index. Sent on key-down,
+            mirroring the firmware's own key-event handling — this is
+            what drives the instant window-focus dispatch, so it
+            fires immediately rather than waiting to see how long the
+            key stays down.
+MSG_KEY_HELD (device -> host): byte 1 = slot index. Sent the instant
+            a key has been held past the firmware's hold threshold —
+            while it's still down, not on release, so the slot clears
+            immediately rather than waiting for key-up. A normal tap
+            never reaches the threshold, so it only ever produces a
+            MSG_KEY and nothing else. Used to manually clear a slot's
+            session mapping (see Daemon._evict_slot()).
 """
 
 from collections import namedtuple
@@ -61,6 +69,7 @@ MSG_HELLO = 0xA1
 MSG_SLOT = 0x20
 MSG_PING = 0x21
 MSG_KEY = 0x22
+MSG_KEY_HELD = 0x23
 
 # "off" turns out NOT to be device-local only: the firmware's own
 # handle_message() equivalent sends it explicitly on "clear" (see
@@ -169,4 +178,8 @@ def parse_report(report):
         if len(report) < 2:
             return None
         return {"t": "key", "i": report[1]}
+    if msg_type == MSG_KEY_HELD:
+        if len(report) < 2:
+            return None
+        return {"t": "key_held", "i": report[1]}
     return None

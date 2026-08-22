@@ -129,6 +129,10 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     return ai_agent_macropad_process_record(keycode, record, AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
 }
 
+void matrix_scan_user(void) {
+    ai_agent_macropad_task(NUM_MACROPAD_SLOTS);
+}
+
 // This keymap only supports VIA_ENABLE=yes builds (this directory's
 // rules.mk sets it, matching Keychron's own stock `via` keymap for this
 // board) — unlike the Air75 board, k1_pro.c (board-level, shared by

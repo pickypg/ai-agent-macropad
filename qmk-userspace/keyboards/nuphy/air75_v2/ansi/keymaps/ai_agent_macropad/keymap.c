@@ -145,6 +145,10 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     return ai_agent_macropad_process_record(keycode, record, AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
 }
 
+void matrix_scan_user(void) {
+    ai_agent_macropad_task(NUM_MACROPAD_SLOTS);
+}
+
 // VIA_ENABLE boards route raw HID through via_command_kb() instead of
 // raw_hid_receive() — quantum/via.c owns that symbol outright once
 // VIA_ENABLE=yes, so defining it here too would be a duplicate-symbol
