@@ -715,6 +715,7 @@ Fixed-size 32-byte raw HID reports in both directions — see
 | `MSG_HELLO`   | device → daemon | device id, `slots`                 |
 | `MSG_SLOT`    | daemon → device | slot index, state (0-31, see below) |
 | `MSG_KEY`     | device → daemon | slot index                         |
+| `MSG_KEY_HELD` | device → daemon | slot index                        |
 
 `ping`/`hello` is the handshake `discover_hid_device()` uses to confirm
 a given raw-HID interface is actually the pad, not some other board's.
@@ -734,12 +735,21 @@ the "unknown" fallback color described above. There's no separate
 slot is just `MSG_SLOT` with state `off` (fully dark — distinct from
 `idle`'s dim glow).
 
-A key press is sent on key-down only (no key-up equivalent — see
-`MSG_KEY` above) and, on the daemon side, logs which session it
-corresponds to and attempts to bring that session's window to the
-front (tried in order: tmux pane, Terminal.app tab by tty, VS Code
-window by project name, IntelliJ IDEA window by project name) — all
-via AppleScript, so this is macOS-only for now.
+A tap is sent as `MSG_KEY` on key-down only (no key-up equivalent) and,
+on the daemon side, logs which session it corresponds to and attempts
+to bring that session's window to the front (tried in order: tmux
+pane, Terminal.app tab by tty, VS Code window by project name,
+IntelliJ IDEA window by project name) — all via AppleScript, so this
+is macOS-only for now.
+
+Holding a slot key for 5s (`AI_AGENT_MACROPAD_HOLD_THRESHOLD_MS` in
+`ai_agent_macropad.h`) fires `MSG_KEY_HELD` — polled continuously from
+`matrix_scan_user()` so it fires the instant the threshold is crossed,
+without waiting for key-up. The daemon manually clears that slot's
+session mapping (`Daemon._evict_slot()`), freeing it for a new session
+to claim — the only way to recover a slot left stuck by a session that
+never sent a clean `SessionEnd` (a crash, a duplicate VS Code window,
+etc.), short of restarting the daemon.
 
 ## Logs
 
@@ -761,6 +771,7 @@ pad now works end to end:
 - ✅ HID protocol to/from QMK keyboards (e.g. NuPhy Air75 V2), with pad auto-discovery
 - ✅ Slot allocation for concurrent sessions (any mix of agents)
 - ✅ Key-press → bring-window-to-front dispatch (macOS)
+- ✅ Hold a slot key 5s to manually clear a stale session mapping (e.g. a crashed session, or a duplicate VS Code window), freeing the slot for a new session
 - ✅ Startup seeding of already-running sessions — `claude agents --json` (Claude Code) or `~/.grok/active_sessions.json` (Grok Build); Codex has neither, see [Agents tested](#agents-tested)
 - ✅ Idle-release: the pad connection closes when no session is active, freeing it for VIA
 - ⚠️ Keychron K1 Pro (ANSI) QMK keymap — written against Keychron's own official firmware
