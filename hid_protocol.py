@@ -14,14 +14,18 @@ Report layout (REPORT_SIZE bytes, unused trailing bytes zero-padded):
     byte 0: message type (MSG_*)
     byte 1: message-specific
     byte 2: message-specific
-    byte 3..: unused, reserved
+    byte 3: message-specific (MSG_HELLO: protocol version)
+    byte 4..: unused, reserved
 
-MSG_PING   (host -> device): no payload. Requests a MSG_HELLO reply —
-            necessary because raw HID is call-and-response: the device
-            only sends an IN report after receiving an OUT report from
-            the host, it can't push "hello" unprompted the moment it's
-            plugged in.
-MSG_HELLO  (device -> host): byte 1 = device id, byte 2 = num_slots.
+MSG_PING   (host -> device): byte 1 = PROTOCOL_VERSION. Requests a
+            MSG_HELLO reply — necessary because raw HID is
+            call-and-response: the device only sends an IN report
+            after receiving an OUT report from the host, it can't
+            push "hello" unprompted the moment it's plugged in. A
+            ping with byte 1 == 0 is not a valid handshake (pre-
+            version firmware/daemon); the pad will not hello.
+MSG_HELLO  (device -> host): byte 1 = device id, byte 2 = num_slots,
+            byte 3 = PROTOCOL_VERSION (must be non-zero).
 MSG_SLOT   (host -> device): byte 1 = slot index, byte 2 = state
             (see STATE_*). A cleared slot is just MSG_SLOT with
             STATE_OFF — the firmware's handle_message() equivalent
@@ -70,6 +74,14 @@ MSG_SLOT = 0x20
 MSG_PING = 0x21
 MSG_KEY = 0x22
 MSG_KEY_HELD = 0x23
+
+# Required on both MSG_PING (byte 1) and MSG_HELLO (byte 3). Start at
+# 1, not 0: unused report bytes are zero-padded, so 0 means "pre-
+# version firmware or daemon" and is rejected as not a valid
+# handshake. Must match AI_AGENT_MACROPAD_PROTOCOL_VERSION in
+# qmk-userspace/users/ai_agent_macropad/ai_agent_macropad.h — the
+# pytest suite greps that #define so the two can't drift.
+PROTOCOL_VERSION = 1
 
 # "off" turns out NOT to be device-local only: the firmware's own
 # handle_message() equivalent sends it explicitly on "clear" (see
@@ -136,8 +148,13 @@ KNOWN_HID_PADS = (NUPHY_AIR75_V2, KEYCHRON_K1_PRO)
 
 
 def pack_ping():
-    """Host -> device: request a MSG_HELLO reply."""
-    return bytes([MSG_PING]) + bytes(REPORT_SIZE - 1)
+    """Host -> device: request a MSG_HELLO reply, advertising
+    PROTOCOL_VERSION so the pad can refuse a pre-version ping.
+    """
+    report = bytearray(REPORT_SIZE)
+    report[0] = MSG_PING
+    report[1] = PROTOCOL_VERSION
+    return bytes(report)
 
 
 def pack_slot(index, state):
@@ -171,9 +188,17 @@ def parse_report(report):
         return None
     msg_type = report[0]
     if msg_type == MSG_HELLO:
-        if len(report) < 3:
+        if len(report) < 4:
             return None
-        return {"t": "hello", "device": report[1], "slots": report[2]}
+        protocol = report[3]
+        if protocol == 0:
+            return None
+        return {
+            "t": "hello",
+            "device": report[1],
+            "slots": report[2],
+            "protocol": protocol,
+        }
     if msg_type == MSG_KEY:
         if len(report) < 2:
             return None

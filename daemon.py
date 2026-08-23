@@ -88,6 +88,7 @@ import threading
 import time
 from pathlib import Path
 
+import hid_protocol
 from pad_link import HidPadLink
 
 # --- Config ------------------------------------------------------------
@@ -1317,16 +1318,35 @@ class Daemon:
         Falls back to keeping __init__'s NUM_SLOTS-sized default if
         `handshake` is None (headless, or the pad didn't answer in
         time) — a best-effort capability query, not a hard
-        requirement. Any session mappings already recorded in the old
-        SlotManager are intentionally discarded: this only ever runs
-        once, before start_unix_server in serve(), so there aren't
-        any yet.
+        requirement. A protocol version that doesn't match
+        hid_protocol.PROTOCOL_VERSION is a warning, not a reject:
+        older firmware may lack states this daemon sends (they render
+        as the unknown fallback color), newer firmware may expose
+        features this daemon doesn't know about yet. Any session
+        mappings already recorded in the old SlotManager are
+        intentionally discarded: this only ever runs once, before
+        start_unix_server in serve(), so there aren't any yet.
         """
         if handshake and handshake.get("slots"):
+            protocol = handshake.get("protocol")
+            if protocol is not None and protocol != hid_protocol.PROTOCOL_VERSION:
+                if protocol > hid_protocol.PROTOCOL_VERSION:
+                    log.warning(
+                        "pad protocol version %d is newer than daemon's %d — "
+                        "update the daemon to support newer keyboard functionality",
+                        protocol, hid_protocol.PROTOCOL_VERSION,
+                    )
+                else:
+                    log.warning(
+                        "pad protocol version %d is older than daemon's %d — "
+                        "keyboard firmware may lack functionality this daemon uses "
+                        "(unknown states render as the fallback color)",
+                        protocol, hid_protocol.PROTOCOL_VERSION,
+                    )
             self.slots = SlotManager(handshake["slots"])
             log.info(
-                "pad handshake reports %d slot(s) — resized SlotManager accordingly",
-                handshake["slots"],
+                "pad handshake reports %d slot(s) protocol=%s — resized SlotManager accordingly",
+                handshake["slots"], protocol,
             )
         else:
             log.info(

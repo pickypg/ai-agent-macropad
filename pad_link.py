@@ -258,17 +258,22 @@ class HidPadLink:
     def handshake(self, timeout=1.5):
         """Ask the device how many slots it has: pings and waits up to
         `timeout` seconds for a "hello" reply correlated via
-        _dispatch() above. Returns {"slots": N}, or None if open()
-        found no pad (nothing to ask) or nothing valid replied in time
-        — callers should fall back to a sane default rather than treat
-        that as fatal, same posture as a headless pad generally.
+        _dispatch() above. Returns {"slots": N, "protocol": P}, or
+        None if open() found no pad (nothing to ask) or nothing valid
+        replied in time — callers should fall back to a sane default
+        rather than treat that as fatal, same posture as a headless
+        pad generally. `protocol` is the pad's PROTOCOL_VERSION; the
+        daemon warns (but still attaches) if it doesn't match ours.
         """
         if not self.attached:
             return None
         self._hello_event.clear()
         self._send_ping()
         if self._hello_event.wait(timeout):
-            return {"slots": self._last_hello.get("slots")}
+            return {
+                "slots": self._last_hello.get("slots"),
+                "protocol": self._last_hello.get("protocol"),
+            }
         log.warning("pad didn't answer a slots handshake within %ss", timeout)
         return None
 

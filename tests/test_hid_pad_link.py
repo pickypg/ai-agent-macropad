@@ -80,8 +80,11 @@ def make_candidate(path, vid=hid_protocol.NUPHY_AIR75_V2.vid, pid=hid_protocol.N
     }
 
 
-def hello_report(device_id=hid_protocol.DEVICE_ID_AIR75_V2, slots=16):
-    return bytes([hid_protocol.MSG_HELLO, device_id, slots]) + bytes(hid_protocol.REPORT_SIZE - 3)
+def hello_report(device_id=hid_protocol.DEVICE_ID_AIR75_V2, slots=16,
+                 protocol=hid_protocol.PROTOCOL_VERSION):
+    return bytes(
+        [hid_protocol.MSG_HELLO, device_id, slots, protocol]
+    ) + bytes(hid_protocol.REPORT_SIZE - 4)
 
 
 # --- discover_hid_device ---------------------------------------------------
@@ -99,6 +102,30 @@ def test_discover_hid_device_ignores_wrong_usage_page(monkeypatch):
     fake = make_fake_hid(devices)
     monkeypatch.setattr(pad_link, "hid", fake)
     assert pad_link.discover_hid_device(hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid) is None
+
+
+def test_discover_hid_device_ignores_hello_with_zero_protocol(monkeypatch):
+    # Pre-version firmware zero-pads byte 3; parse_report rejects that
+    # as not a valid handshake, so discovery must not attach.
+    devices = [make_candidate(b"iface0")]
+    responses = {b"iface0": hello_report(protocol=0)}
+    fake = make_fake_hid(devices, responses)
+    monkeypatch.setattr(pad_link, "hid", fake)
+    assert pad_link.discover_hid_device(
+        hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid, handshake_timeout=0.05
+    ) is None
+
+
+def test_discover_hid_device_accepts_newer_protocol(monkeypatch):
+    # A pad ahead of this daemon must still be discovered so
+    # apply_handshake can warn rather than treating it as "no pad."
+    devices = [make_candidate(b"iface0")]
+    responses = {b"iface0": hello_report(protocol=hid_protocol.PROTOCOL_VERSION + 1)}
+    fake = make_fake_hid(devices, responses)
+    monkeypatch.setattr(pad_link, "hid", fake)
+    assert pad_link.discover_hid_device(
+        hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid, handshake_timeout=0.05
+    ) == b"iface0"
 
 
 def test_discover_hid_device_picks_interface_that_replies_hello(monkeypatch):

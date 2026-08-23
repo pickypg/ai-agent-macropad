@@ -50,6 +50,12 @@ enum ai_agent_macropad_msg {
     MSG_KEY_HELD = 0x23,
 };
 
+// Required on MSG_PING (byte 1) and MSG_HELLO (byte 3). Start at 1,
+// not 0: unused report bytes are zero-padded, so 0 means a pre-version
+// peer and is not a valid handshake. Must match hid_protocol.py's
+// PROTOCOL_VERSION.
+#define AI_AGENT_MACROPAD_PROTOCOL_VERSION 1
+
 // Pad states — must match hid_protocol.py's STATE_* values 1:1 (same
 // names, same numbers — order alone isn't enough once STATE_OFF is
 // pinned below). STATE_OFF (cleared, no session mapped) is intentionally

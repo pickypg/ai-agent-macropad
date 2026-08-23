@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 import hid_protocol
@@ -11,7 +13,29 @@ def test_pack_ping():
     report = hid_protocol.pack_ping()
     assert len(report) == hid_protocol.REPORT_SIZE
     assert report[0] == hid_protocol.MSG_PING
-    assert report[1:] == bytes(hid_protocol.REPORT_SIZE - 1)
+    assert report[1] == hid_protocol.PROTOCOL_VERSION
+    assert report[2:] == bytes(hid_protocol.REPORT_SIZE - 2)
+
+
+def test_protocol_version_is_nonzero():
+    # Unused report bytes are zero-padded, so 0 cannot be a real
+    # protocol version — parse_report treats hello byte 3 == 0 as
+    # "not a valid handshake."
+    assert hid_protocol.PROTOCOL_VERSION >= 1
+
+
+def test_protocol_version_matches_firmware_header():
+    header = (
+        Path(__file__).resolve().parents[1]
+        / "qmk-userspace/users/ai_agent_macropad/ai_agent_macropad.h"
+    )
+    needle = "#define AI_AGENT_MACROPAD_PROTOCOL_VERSION "
+    matches = [
+        line for line in header.read_text().splitlines()
+        if line.startswith(needle)
+    ]
+    assert len(matches) == 1, matches
+    assert int(matches[0][len(needle):].strip()) == hid_protocol.PROTOCOL_VERSION
 
 
 def test_pack_slot_encodes_index_and_state():
@@ -72,12 +96,20 @@ def test_pack_slot_rejects_out_of_range_index():
 
 
 def test_parse_report_hello():
-    report = bytes([hid_protocol.MSG_HELLO, hid_protocol.DEVICE_ID_AIR75_V2, 16]) + bytes(29)
+    report = bytes(
+        [hid_protocol.MSG_HELLO, hid_protocol.DEVICE_ID_AIR75_V2, 16, hid_protocol.PROTOCOL_VERSION]
+    ) + bytes(28)
     assert hid_protocol.parse_report(report) == {
         "t": "hello",
         "device": hid_protocol.DEVICE_ID_AIR75_V2,
         "slots": 16,
+        "protocol": hid_protocol.PROTOCOL_VERSION,
     }
+
+
+def test_parse_report_hello_zero_protocol_returns_none():
+    report = bytes([hid_protocol.MSG_HELLO, hid_protocol.DEVICE_ID_AIR75_V2, 16, 0]) + bytes(28)
+    assert hid_protocol.parse_report(report) is None
 
 
 def test_parse_report_key():
@@ -101,6 +133,10 @@ def test_parse_report_unknown_type_returns_none():
 
 def test_parse_report_truncated_hello_returns_none():
     assert hid_protocol.parse_report(bytes([hid_protocol.MSG_HELLO, 0x01])) is None
+    # Pre-version hello (device + slots, no protocol byte) is also invalid.
+    assert hid_protocol.parse_report(
+        bytes([hid_protocol.MSG_HELLO, hid_protocol.DEVICE_ID_AIR75_V2, 16])
+    ) is None
 
 
 def test_parse_report_truncated_key_returns_none():

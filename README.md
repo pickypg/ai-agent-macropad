@@ -98,6 +98,7 @@ been tried.
 | `daemon.py`                         | Host-side daemon: Unix socket server + hook-event → pad-state mapping + idle-release orchestration        |
 | `pad_link.py`                       | Owns the HID connection to the pad: discovery, open/close, read/write, reconnection                       |
 | `hid_protocol.py`                   | Wire-level binary report format for the HID transport (QMK-based pads) — see [Protocol](#protocol)        |
+| `Makefile`                          | Repeatable QMK compile: stamps protocol version + QMK-fork/overlay git hashes into the `.bin` name (`make nuphy-air75-v2`, `make keychron-k1-pro`) |
 | `fake_hooks.py`                     | Simulates an agent session's hook events (Claude Code by default, `--agent codex` for Codex's own event shape), for testing the daemon without real hooks wired up |
 | `hid_bringup_test.py`               | Standalone hello/RGB round-trip check against a real QMK pad, independent of `daemon.py`                  |
 | `qmk-userspace/`                    | QMK userspace overlay, built against a separate local QMK checkout — `users/ai_agent_macropad/` holds the protocol/state logic shared by every board's keymap; `keyboards/.../keymaps/ai_agent_macropad/` holds each board's own layout, LED map, and device ID. Keychron K1 Pro also ships `keyboards/keychron/k1_pro/k1_pro.c.patch`, a small patch applied to that board's own (unmodified-otherwise) firmware checkout — see [QMK keyboard (Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified) for why |
@@ -179,20 +180,15 @@ checkout that isn't part of this repo:
 git clone --branch nuphy-keyboards https://github.com/nuphy-src/qmk_firmware.git ../nuphy-qmk-firmware
 cd ../nuphy-qmk-firmware && git submodule update --init --recursive
 brew install qmk/qmk/qmk    # plus arm-none-eabi-gcc@8 (osx-cross/arm tap) for this board's STM32F072
-qmk config user.qmk_home=../nuphy-qmk-firmware
 
-cd ../ai-agent-macropad/qmk-userspace
-QMK_USERSPACE="$(pwd)" qmk compile -kb nuphy/air75_v2/ansi -km ai_agent_macropad
+cd ../ai-agent-macropad
+make nuphy-air75-v2
+# NUPHY_QMK=/path/to/nuphy-qmk-firmware make nuphy-air75-v2
 ```
 
-To flash: unplug the board (or just turn it off), hold **Esc**, plug it back in over USB-C
-(or turn it back on) — this is QMK bootmagic (default row/col 0,0 = Esc on this board), not
-anything keymap-specific, so it works for recovery too regardless of what firmware is
-currently on the board:
+That stamps the protocol version plus short git hashes of the QMK fork and this overlay into the `.bin` name under `qmk-userspace/` (gitignored), so someone else can rebuild the same image. Raw `qmk compile` still works but will not stamp those hashes.
 
-```
-QMK_USERSPACE="$(pwd)" qmk flash -kb nuphy/air75_v2/ansi -km ai_agent_macropad
-```
+This repo does not flash. Put the board in bootloader (unplug or power off, hold **Esc**, plug back in over USB-C — QMK bootmagic at row/col 0,0, also the recovery path regardless of what's currently on the board) and flash the `.bin` with [qmk-browser-flasher](https://github.com/pickypg/qmk-browser-flasher).
 
 Then verify the wire protocol works before trusting the full daemon to it —
 [`hid_bringup_test.py`](hid_bringup_test.py) pings the board directly (bypassing `daemon.py`
@@ -271,24 +267,21 @@ includes it; worth checking before you patch by hand.
 git clone --branch wireless_playground https://github.com/Keychron/qmk_firmware.git ../keychron-qmk-firmware
 cd ../keychron-qmk-firmware && git submodule update --init --recursive
 brew install qmk/qmk/qmk    # plus an ARM cross-compiler for this board's STM32L432
-qmk config user.qmk_home=../keychron-qmk-firmware
 
 git apply ../ai-agent-macropad/qmk-userspace/keyboards/keychron/k1_pro/k1_pro.c.patch
 # (already cd'd into ../keychron-qmk-firmware above — the patch's paths
 # are relative to that repo's root, so no --directory needed here)
 
-cd ../ai-agent-macropad/qmk-userspace
-QMK_USERSPACE="$(pwd)" qmk compile -kb keychron/k1_pro/ansi/rgb -km ai_agent_macropad
+cd ../ai-agent-macropad
+make keychron-k1-pro
+# KEYCHRON_QMK=/path/to/keychron-qmk-firmware make keychron-k1-pro
 ```
 
-To flash, per [Keychron's own
-readme](https://github.com/Keychron/qmk_firmware/blob/wireless_playground/keyboards/keychron/k1_pro/readme.md):
-connect the USB-C cable, toggle the board's Mac/Win mode switch to **Off**, hold down **Esc**
-(or the reset button underneath the spacebar), then toggle the switch to **Cable**:
-
-```
-QMK_USERSPACE="$(pwd)" qmk flash -kb keychron/k1_pro/ansi/rgb -km ai_agent_macropad
-```
+This repo does not flash. Enter bootloader per [Keychron's own
+readme](https://github.com/Keychron/qmk_firmware/blob/wireless_playground/keyboards/keychron/k1_pro/readme.md)
+(USB-C connected, Mac/Win switch **Off**, hold **Esc** or the reset button under the spacebar,
+toggle the switch to **Cable**) and flash the `.bin` with
+[qmk-browser-flasher](https://github.com/pickypg/qmk-browser-flasher).
 
 Then, same as the Air75 board, verify the wire protocol directly before trusting the daemon to
 it — `python3 hid_bringup_test.py` — and only move on once you've watched the real LEDs cycle
@@ -435,7 +428,8 @@ stands in for it):
   (`tests/test_hid_protocol.py`).
 - The slots-from-handshake path (`HidPadLink.handshake()`,
   `Daemon.apply_handshake()`) is tested in `tests/test_pad_handshake.py`,
-  including the timeout/no-reply/headless cases.
+  including the timeout/no-reply/headless cases and protocol-mismatch
+  warnings (older and newer pad both still attach).
 - Startup seeding of pre-existing sessions — `discover_running_sessions()`
   (Claude Code, via `subprocess.run` swapped for a recording fake),
   `discover_running_grok_sessions()` (Grok Build, via a temp
@@ -557,16 +551,22 @@ for their next hook event. See `Daemon.seed_existing_sessions()` in
 Fixed-size 32-byte raw HID reports in both directions — see
 `hid_protocol.py` for the encode/decode helpers and exact byte layout:
 
-| Byte 0 (type) | Direction       | Bytes 1-2                          |
-| ------------- | --------------- | ---------------------------------- |
-| `MSG_PING`    | daemon → device | (none)                             |
-| `MSG_HELLO`   | device → daemon | device id, `slots`                 |
-| `MSG_SLOT`    | daemon → device | slot index, state (0-31, see below) |
-| `MSG_KEY`     | device → daemon | slot index                         |
-| `MSG_KEY_HELD` | device → daemon | slot index                        |
+| Byte 0 (type) | Direction       | Bytes 1+                                 |
+| ------------- | --------------- | ---------------------------------------- |
+| `MSG_PING`    | daemon → device | protocol version                         |
+| `MSG_HELLO`   | device → daemon | device id, `slots`, protocol version     |
+| `MSG_SLOT`    | daemon → device | slot index, state (0-31, see below)      |
+| `MSG_KEY`     | device → daemon | slot index                               |
+| `MSG_KEY_HELD` | device → daemon | slot index                              |
 
 `ping`/`hello` is the handshake `discover_hid_device()` uses to confirm
 a given raw-HID interface is actually the pad, not some other board's.
+Both sides must send a non-zero protocol version (`hid_protocol.PROTOCOL_VERSION`,
+currently 1) — a missing or zero version is not a valid handshake, so a pad
+flashed before this existed will not be discovered until it's rebuilt. If the
+versions differ, the daemon still attaches and logs a warning: older firmware
+may lack states this daemon sends (they render as the unknown fallback color);
+newer firmware may expose features this daemon doesn't know about yet.
 
 State bytes are `hid_protocol.STATE_TO_CODE`'s values (`idle`=0,
 `working`=1, `waiting`=2, `done`=3, `error`=4, `question`=5,

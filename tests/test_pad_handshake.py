@@ -1,3 +1,4 @@
+import logging
 import types
 import time
 
@@ -5,25 +6,24 @@ import daemon
 import hid_protocol
 import pad_link
 
-from test_hid_pad_link import make_candidate, make_fake_hid
-
-
-def hello_report(slots, device_id=hid_protocol.DEVICE_ID_AIR75_V2):
-    return bytes([hid_protocol.MSG_HELLO, device_id, slots]) + bytes(hid_protocol.REPORT_SIZE - 3)
+from test_hid_pad_link import hello_report, make_candidate, make_fake_hid
 
 
 # --- HidPadLink.handshake() ------------------------------------------------
 
 def test_hidpadlink_handshake_returns_slots(monkeypatch):
     devices = [make_candidate(b"iface0")]
-    responses = {b"iface0": hello_report(9)}
+    responses = {b"iface0": hello_report(slots=9)}
     monkeypatch.setattr(pad_link, "hid", make_fake_hid(devices, responses))
 
     link = pad_link.HidPadLink(lambda m: None)
     link.open()
     try:
         assert link.attached is True
-        assert link.handshake(timeout=1.0) == {"slots": 9}
+        assert link.handshake(timeout=1.0) == {
+            "slots": 9,
+            "protocol": hid_protocol.PROTOCOL_VERSION,
+        }
     finally:
         link.close()
 
@@ -37,7 +37,7 @@ def test_hidpadlink_handshake_times_out_after_discovery_stops_answering(monkeypa
     persistent connection are separate instances).
     """
     path = b"iface0"
-    reply = [hello_report(9)]  # mutable + shared: delivered at most once, ever
+    reply = [hello_report(slots=9)]  # mutable + shared: delivered at most once, ever
 
     class OnceThenSilentDevice:
         def __init__(self, path=None, vid=None, pid=None, serial=None):
@@ -117,3 +117,38 @@ def test_apply_handshake_resized_manager_starts_empty():
     d.apply_handshake({"slots": 2})
     assert d.slots.slot_for("stale-session") is None
     assert d.slots.num_slots == 2
+
+
+def test_apply_handshake_warns_when_pad_protocol_is_newer(caplog):
+    d = daemon.Daemon()
+    with caplog.at_level(logging.WARNING, logger="macropad-daemon"):
+        d.apply_handshake({
+            "slots": 4,
+            "protocol": hid_protocol.PROTOCOL_VERSION + 1,
+        })
+    assert d.slots.num_slots == 4
+    assert "newer than daemon's" in caplog.text
+    assert "update the daemon" in caplog.text
+
+
+def test_apply_handshake_warns_when_pad_protocol_is_older(caplog):
+    d = daemon.Daemon()
+    with caplog.at_level(logging.WARNING, logger="macropad-daemon"):
+        d.apply_handshake({
+            "slots": 4,
+            "protocol": hid_protocol.PROTOCOL_VERSION - 1,
+        })
+    assert d.slots.num_slots == 4
+    assert "older than daemon's" in caplog.text
+    assert "may lack functionality" in caplog.text
+
+
+def test_apply_handshake_matching_protocol_does_not_warn(caplog):
+    d = daemon.Daemon()
+    with caplog.at_level(logging.WARNING, logger="macropad-daemon"):
+        d.apply_handshake({
+            "slots": 4,
+            "protocol": hid_protocol.PROTOCOL_VERSION,
+        })
+    assert d.slots.num_slots == 4
+    assert caplog.text == ""

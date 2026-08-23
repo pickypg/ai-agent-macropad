@@ -156,10 +156,21 @@ bool ai_agent_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t de
 
     switch (data[0]) {
         case MSG_PING: {
+            // Byte 1 is the daemon's PROTOCOL_VERSION. 0 (or a report
+            // too short to carry it) is a pre-version ping — ours to
+            // claim so VIA doesn't see it, but not a handshake we'll
+            // answer. A version that *differs* from ours still gets a
+            // hello: the daemon compares and warns; we don't refuse,
+            // so a newer pad can still identify itself to an older
+            // daemon.
+            if (length < 2 || data[1] == 0) {
+                return true;
+            }
             uint8_t response[AI_AGENT_MACROPAD_REPORT_SIZE] = {0};
             response[0] = MSG_HELLO;
             response[1] = device_id;
             response[2] = num_slots;
+            response[3] = AI_AGENT_MACROPAD_PROTOCOL_VERSION;
             raw_hid_send(response, sizeof(response));
             return true;
         }

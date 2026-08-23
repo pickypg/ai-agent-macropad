@@ -112,10 +112,29 @@ def main():
             print("FAILED: no hello reply within {}s".format(HANDSHAKE_TIMEOUT))
             sys.exit(1)
 
-        print(f"hello: device={reply['device']} slots={reply['slots']}")
+        print(
+            f"hello: device={reply['device']} slots={reply['slots']} "
+            f"protocol={reply.get('protocol')}"
+        )
         known_device_ids = (hid_protocol.DEVICE_ID_AIR75_V2, hid_protocol.DEVICE_ID_K1_PRO)
         if reply["device"] not in known_device_ids:
             print(f"WARNING: unexpected device id {reply['device']!r}")
+        protocol = reply.get("protocol")
+        if protocol is None:
+            print("FAILED: hello did not carry a protocol version")
+            sys.exit(1)
+        if protocol > hid_protocol.PROTOCOL_VERSION:
+            print(
+                f"WARNING: pad protocol {protocol} is newer than this "
+                f"bringup's {hid_protocol.PROTOCOL_VERSION} — update this "
+                "repo to support newer keyboard functionality"
+            )
+        elif protocol < hid_protocol.PROTOCOL_VERSION:
+            print(
+                f"WARNING: pad protocol {protocol} is older than this "
+                f"bringup's {hid_protocol.PROTOCOL_VERSION} — keyboard "
+                "firmware may lack functionality this side uses"
+            )
         num_slots = reply["slots"]
         print("PASS: hello round-trip OK")
 
