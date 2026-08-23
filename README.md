@@ -24,10 +24,11 @@ small source patch applied before it'll build; see [QMK keyboard
 before relying on it.
 
 This repo covers the full path end to end: per-agent hook wiring (an
-example settings file plus the adapter script it invokes — one pair
-per agent, under `claude/` and `codex/`), a host-side daemon that
-speaks a small binary protocol with the pad over USB HID, and the QMK
-keymap C that runs on the pad itself.
+example settings file, the adapter script it invokes, and a setup
+guide — one trio per agent, under `claude/`, `codex/`, `grok/`, and
+`cursor/`), a host-side daemon that speaks a small binary protocol
+with the pad over USB HID, and the QMK keymap C that runs on the pad
+itself.
 
 The daemon only holds the pad's HID connection open while at least one
 agent session is active, releasing it shortly after the last one
@@ -42,13 +43,14 @@ The pad's hardware, HID protocol, and daemon core don't assume any
 particular agent — but wiring one up still means writing the piece
 that turns its own event stream into hook payloads on
 `~/.ai-agent-macropad/daemon.sock` (see [Protocol](#protocol) below).
-Three agents have that piece written so far:
+Four agents have that piece written so far:
 
 | Agent                                          | Status     | Notes                                                                                 |
 | ----------------------------------------------- | ---------- | -------------------------------------------------------------------------------------- |
-| [Claude Code](https://claude.com/claude-code)   | ✅ Tested  | Wired via Claude Code's own hooks — see [`claude/example_hook_settings.json`](claude/example_hook_settings.json) and [`claude/hook.sh`](claude/hook.sh) |
-| [Codex CLI](https://developers.openai.com/codex) | ✅ Tested | Wired via Codex's own hooks (near-identical event vocabulary to Claude Code's) — see [`codex/example_hooks.json`](codex/example_hooks.json) and [`codex/hook.sh`](codex/hook.sh). Verified end to end with a real `codex exec` run; see [Wire up Codex hooks](#wire-up-codex-hooks) for the two gaps versus Claude Code (no `PostToolUseFailure` or `Notification` equivalent) |
-| [Grok Build](https://docs.x.ai/build) (xAI)     | ✅ Tested | Wired via Grok Build's own hooks — its payloads use a different shape (camelCase fields, snake_case event-name values) that [`grok/hook.sh`](grok/hook.sh) translates before forwarding; see [`grok/example_hooks.json`](grok/example_hooks.json). Verified end to end with a real `grok -p ...` run. Actually has *more* of Claude Code's event vocabulary than Codex (its own `StopFailure`/`StopCancelled`, and a reliable `Notification:permission_prompt`) but shares Codex's `PostToolUseFailure` gap in practice; see [Wire up Grok Build hooks](#wire-up-grok-build-hooks) |
+| [Claude Code](https://claude.com/claude-code)   | ✅ Tested  | Wired via Claude Code's own hooks — see [claude/README.md](claude/README.md) |
+| [Codex CLI](https://developers.openai.com/codex) | ✅ Tested | Wired via Codex's own hooks (near-identical event vocabulary to Claude Code's), verified with a real `codex exec` run — see [codex/README.md](codex/README.md) |
+| [Cursor](https://cursor.com) CLI (`agent`)      | ✅ Tested | Wired via Cursor's own hooks — its event names are camelCase (`sessionStart`, `preToolUse`, ...), translated before forwarding; verified end to end against real interactive `agent` sessions and `agent -p` runs, with only MCP events left untested — see [cursor/README.md](cursor/README.md) for the full verification log and known gaps |
+| [Grok Build](https://docs.x.ai/build) (xAI)     | ✅ Tested | Wired via Grok Build's own hooks — payload shape diverges from Claude Code's/Codex's (camelCase fields, snake_case event values), translated before forwarding; verified with a real `grok -p ...` run — see [grok/README.md](grok/README.md) |
 
 Update this table as support for other agents is added.
 
@@ -102,10 +104,16 @@ been tried.
 | `requirements.txt`                  | Python dependencies for the daemon                                                                        |
 | `requirements-dev.txt`              | Adds `pytest` on top of `requirements.txt`, for running the test suite                                    |
 | `tests/`                            | `pytest` suite for `daemon.py`, `pad_link.py`, and `hid_protocol.py` (see [Testing](#testing))             |
+| `claude/README.md`                  | Setup guide for wiring up Claude Code hooks                                                                |
 | `claude/example_hook_settings.json` | `hooks` block to merge into Claude Code's `settings.json`, wiring every relevant event to `hook.sh`        |
 | `claude/hook.sh`                    | Reads a Claude Code hook payload from stdin, enriches it, tags it `agent: claude-code`, and forwards it to the daemon's socket |
+| `codex/README.md`                   | Setup guide for wiring up Codex CLI hooks                                                                  |
 | `codex/example_hooks.json`          | `hooks` block for Codex CLI's `hooks.json`/`config.toml`, wiring every relevant event to `hook.sh`         |
 | `codex/hook.sh`                     | Same idea as `claude/hook.sh`, for Codex's own (near-identical) hook payload shape — tags it `agent: codex` |
+| `cursor/README.md`                  | Setup guide for wiring up Cursor CLI hooks, plus the full live-verification log and known gaps             |
+| `cursor/example_hooks.json`         | `hooks.json` block for Cursor's own hooks config, wiring every relevant event to `hook.sh`                 |
+| `cursor/hook.sh`                    | Translates Cursor's own (camelCase-valued `hook_event_name`) hook payload shape into this repo's wire format — tags it `agent: cursor` |
+| `grok/README.md`                    | Setup guide for wiring up Grok Build hooks                                                                 |
 | `grok/example_hooks.json`           | Hook file for Grok Build's `~/.grok/hooks/` directory, wiring every relevant event to `hook.sh`            |
 | `grok/hook.sh`                      | Translates Grok Build's own (camelCase, snake_case-valued) hook payload shape into this repo's wire format — tags it `agent: grok-build` |
 
@@ -113,8 +121,9 @@ been tried.
 
 ```
 Claude Code hooks --> claude/hook.sh --\
-       Codex hooks --> codex/hook.sh -----> daemon.py    <-- USB HID --> QMK keyboard
-   Grok Build hooks --> grok/hook.sh --/   (Unix socket)
+       Codex hooks --> codex/hook.sh ----\
+       Cursor hooks --> cursor/hook.sh ------> daemon.py    <-- USB HID --> QMK keyboard
+   Grok Build hooks --> grok/hook.sh --/  (Unix socket)
 ```
 
 `daemon.py` listens on a Unix domain socket at `~/.ai-agent-macropad/daemon.sock`
@@ -367,6 +376,8 @@ a session's hook lifecycle against a running daemon:
 python3 fake_hooks.py                        # one simulated Claude Code session
 python3 fake_hooks.py --sessions 3           # three concurrent sessions, staggered
 python3 fake_hooks.py --agent codex          # simulate a Codex CLI session instead
+python3 fake_hooks.py --agent grok-build     # simulate a Grok Build session instead
+python3 fake_hooks.py --agent cursor         # simulate a Cursor CLI session instead
 ```
 
 Each run walks through `SessionStart` → prompt → tool calls (including
@@ -385,192 +396,17 @@ just needs to happen before the first real hook fires:
 mkdir -p "$HOME/.ai-agent-macropad"
 ```
 
-Both adapter scripts below need `jq` and a `nc` build that supports
+All four adapter scripts need `jq` and a `nc` build that supports
 Unix-domain sockets (`-U`, e.g. macOS's built-in `nc`) on `PATH`.
 
-#### Wire up Claude Code hooks
+Each agent's own setup guide covers the rest — copying/deploying its
+adapter script, wiring its native hooks config, and any agent-specific
+gotchas confirmed during testing:
 
-1. Copy the script and make it executable:
-
-   ```
-   cp claude/hook.sh "$HOME/.ai-agent-macropad/hook-claude.sh"
-   chmod +x "$HOME/.ai-agent-macropad/hook-claude.sh"
-   ```
-
-2. Merge the `"hooks"` block from
-   [`claude/example_hook_settings.json`](claude/example_hook_settings.json)
-   into your Claude Code `settings.json` (global `~/.claude/settings.json`
-   or a project's `.claude/settings.json`). It registers
-   `$HOME/.ai-agent-macropad/hook-claude.sh` as a command hook for every
-   event `handle_hook_event()` cares about (`SessionStart`,
-   `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`,
-   `PostToolUseFailure`, `Notification`, `Stop`, `SubagentStop`,
-   `SessionEnd`). The `Notification` entries split on `matcher`
-   (`agent_needs_input` vs. `idle_prompt`) and pass
-   `MACROPAD_NOTIFICATION_TYPE` as an env var, since that's the reliable
-   way to know which subtype fired for a given invocation
-   (`Notification:permission_prompt` itself is not wired up — see
-   [`hook_to_state`'s docstring](daemon.py) for why).
-
-[`claude/hook.sh`](claude/hook.sh) reads the hook's JSON payload from
-stdin (Claude Code already includes `hook_event_name` and `session_id`
-in it) and forwards it to `~/.ai-agent-macropad/daemon.sock` via `nc -U`,
-after using `jq` to fill in a few fields the payload doesn't reliably
-carry on its own:
-
-- `agent`, always `"claude-code"` — bookkeeping only (see
-  `Daemon.session_agents` in `daemon.py`), doesn't affect state mapping.
-- `notification_type`, from the `MACROPAD_NOTIFICATION_TYPE` env var set
-  by the matcher branch in `settings.json`.
-- `tmux_pane`, from the script's own `$TMUX_PANE` (empty if not running
-  inside tmux).
-- `controlling_tty`, at `SessionStart` only: Claude Code runs hook
-  commands detached with no controlling terminal, so the script instead
-  reads the _parent_ process's tty via `ps -o tty= -p "$PPID"` — the
-  process Claude Code actually spawned still has one.
-
-It fails open by design (redirects `nc`'s output away, always exits 0)
-so a daemon that isn't running never blocks a tool call or a session,
-and caps the socket write at one second so `PreToolUse`/`PostToolUse` —
-which fire on every tool call — stay fast.
-
-#### Wire up Codex hooks
-
-Codex CLI's own hooks system (distinct from its older, more limited
-`notify` config key) turns out to use almost the exact same event
-vocabulary as Claude Code's — same event names (`SessionStart`,
-`UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`,
-`Stop`, `SubagentStop`, `SessionEnd`), same delivery (JSON on stdin),
-and even the same `hooks.json` schema shape — so `codex/hook.sh` is
-almost identical to `claude/hook.sh`; see its comments for the couple
-of places they diverge, and [`hook_to_state`'s
-docstring](daemon.py) for what that means for pad states.
-
-1. Copy the script and make it executable:
-
-   ```
-   cp codex/hook.sh "$HOME/.ai-agent-macropad/hook-codex.sh"
-   chmod +x "$HOME/.ai-agent-macropad/hook-codex.sh"
-   ```
-
-2. Wire up the `"hooks"` block from
-   [`codex/example_hooks.json`](codex/example_hooks.json), which points
-   every relevant event at `$HOME/.ai-agent-macropad/hook-codex.sh`.
-   Codex discovers hooks from `~/.codex/hooks.json`,
-   `~/.codex/config.toml`'s inline `[hooks]` tables, or the equivalent
-   pair inside a project's own `.codex/` — see [Codex's hooks
-   reference](https://developers.openai.com/codex/hooks) for the exact
-   `hooks.json` vs. `config.toml` syntax. **What was actually verified
-   working here** (real `codex exec` run, `codex-cli 0.149.0`) was the
-   global `~/.codex/config.toml` inline-table form — a project-local
-   `.codex/hooks.json` did not fire in that same version despite
-   matching Codex's documented format, so if hooks silently don't fire
-   for you, try `config.toml` before assuming something else is wrong.
-
-3. **New hooks need to be trusted before Codex will run them** — the
-   first time, an interactive `codex` session prompts you to review and
-   trust them. For non-interactive use (`codex exec`, scripts, CI),
-   pass `--dangerously-bypass-hook-trust` instead — as the name warns,
-   only do this for hook sources you already trust (i.e. `codex/hook.sh`
-   as shipped in this repo, not an arbitrary command).
-
-Known gaps versus Claude Code (see `hook_to_state`'s docstring in
-`daemon.py` for the full reasoning): Codex has no `PostToolUseFailure`
-event, so a failed Codex tool call still reports as a normal
-`PostToolUse` (state stays `working`, never `error`) — there's no
-reliable field in that payload to tell success from failure apart.
-Codex also has no `Notification` event, so the `waiting` (idle 60s+)
-state never fires for a Codex session — only Claude Code has an
-equivalent. Everything else, including `PermissionRequest` -> `question`,
-works the same as Claude Code.
-
-#### Wire up Grok Build hooks
-
-Grok Build's own hooks system (documented at
-[docs.x.ai/build](https://docs.x.ai/build/features/hooks)) discovers
-hooks from `~/.grok/hooks/*.json` directly — no merging into an
-existing config file needed, and global hooks there are always
-trusted, no per-project trust prompt to deal with (unlike Codex).
-Its hook *payloads*, however, diverge from Claude Code's and Codex's
-more than either of those diverge from each other: every field is
-camelCase (`hookEventName`, `sessionId`, `toolName`, ...), and —
-confirmed against a real `grok -p ...` run, contradicting what Grok
-Build's own docs imply — `hookEventName`'s *value* is snake_case
-(`"pre_tool_use"`, `"post_tool_use"`, `"stop"`, ...) rather than the
-PascalCase (`"PreToolUse"`, ...) its hooks reference uses for
-hook-file matching. [`grok/hook.sh`](grok/hook.sh) translates both the
-field names and the event-name values before forwarding — see its own
-comments for the full list of what it translates and why.
-
-1. Copy the script and make it executable:
-
-   ```
-   cp grok/hook.sh "$HOME/.ai-agent-macropad/hook-grok.sh"
-   chmod +x "$HOME/.ai-agent-macropad/hook-grok.sh"
-   ```
-
-2. Copy [`grok/example_hooks.json`](grok/example_hooks.json) into
-   Grok Build's own global hooks directory:
-
-   ```
-   mkdir -p "$HOME/.grok/hooks"
-   cp grok/example_hooks.json "$HOME/.grok/hooks/ai-agent-macropad.json"
-   ```
-
-   It wires every event `handle_hook_event()` cares about
-   (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
-   `PostToolUseFailure`, `PermissionDenied`, `Notification`, `Stop`,
-   `StopFailure`, `StopCancelled`, `SubagentStart`, `SubagentStop`,
-   `PreCompact`, `PostCompact`, `SessionEnd`) to
-   `$HOME/.ai-agent-macropad/hook-grok.sh` — several of these
-   (`PermissionDenied`, the `Subagent*`/`*Compact` pair) currently map
-   to no state change, wired up anyway so a future `hook_to_state()`
-   change doesn't also require re-editing this file, same reasoning as
-   Claude Code's own `SubagentStop` entry.
-
-3. Reload hooks in any already-running Grok Build session (`r` in the
-   Hooks tab, opened via `Ctrl+L` or `/hooks`), or just start a new one
-   — no restart or trust step needed for a global hook.
-
-Grok Build also reads `~/.claude/settings.json` by default, for
-compatibility with Claude Code's own hook files (see its [Hooks
-docs](https://docs.x.ai/build/features/hooks#hook-locations)) — so if
-you already have `claude/hook.sh` wired up on this machine (step
-above), a Grok Build session will *also* invoke it for every event,
-confirmed live, passing Grok's own camelCase envelope
-(`hookEventName`/`sessionId`, not Claude Code's snake_case). Since
-`claude/hook.sh` requires *both* `hook_event_name` and `session_id` to
-be present before it forwards anything — every genuine Claude Code
-event includes both — it recognizes a Grok-shaped payload as foreign
-and drops it immediately, without ever touching the daemon's socket
-or the daemon's logs. It's still an extra process spawned per event
-for no benefit, though. To stop that, add to `~/.grok/config.toml`:
-
-```toml
-[compat.claude]
-hooks = false
-```
-
-Gaps versus Claude Code, confirmed live during development (see
-`hook_to_state`'s docstring in `daemon.py` for the full reasoning):
-
-- Grok Build's docs list `PostToolUseFailure` as a distinct event, but
-  in practice — tried both a nonzero shell exit code and a
-  nonexistent-file read — an ordinary tool failure still comes back as
-  a plain `PostToolUse` (state stays `working`, never `error`), the
-  same practical gap as Codex. It's still translated and mapped to
-  `error` in case a genuine infra-level failure does use it.
-- `PermissionDenied` (Grok Build's rule-based auto-deny, e.g. via
-  `--deny`) fires *after* the decision is already made, with nothing
-  left pending — it deliberately maps to no state change, unlike
-  Claude Code/Codex's `PermissionRequest`. The actual "a permission UI
-  is waiting on you" signal for Grok Build is
-  `Notification:permission_prompt`, confirmed live and — per Grok
-  Build's own docs — reliable, unlike Claude Code's version of that
-  same subtype (see [Pad states](#pad-states)).
-- `StopFailure` and `StopCancelled` have no Claude Code/Codex
-  equivalent (mapped to `error` and `done` respectively) — see
-  [Pad states](#pad-states).
+- [Claude Code](claude/README.md)
+- [Codex CLI](codex/README.md)
+- [Cursor CLI](cursor/README.md)
+- [Grok Build](grok/README.md)
 
 ## Testing
 
@@ -618,6 +454,13 @@ stands in for it):
   guessed) are exercised in `tests/test_codex_hook_mapping.py`, mostly
   as regression insurance that `hook_to_state()` stays agent-agnostic
   rather than re-testing mapping rules already covered elsewhere.
+- Cursor-shaped hook payloads, i.e. already translated by
+  `cursor/hook.sh` into this repo's wire format (real field/event names
+  and values — `postToolUseFailure` firing reliably, `afterFileEdit`'s
+  real `edits:[{old_string,new_string}]` shape, `subagentStart`/
+  `subagentStop` and `preCompact` confirmed to never fire — see
+  [cursor/README.md](cursor/README.md) for the full verification log)
+  are exercised in `tests/test_cursor_hook_mapping.py`.
 - Grok Build-shaped hook payloads, i.e. already translated by
   `grok/hook.sh` into this repo's wire format (real field/event names
   and values — `tool_name: "run_terminal_command"`,
@@ -639,7 +482,7 @@ together](#how-it-fits-together)). Recognized fields:
 | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `hook_event_name`   | Selects the resulting pad state (see below)                                                                      |
 | `session_id`        | Identifies which pad slot this event belongs to                                                                  |
-| `agent`             | Which agent sent this (`"claude-code"`, `"codex"`, `"grok-build"`) — bookkeeping/logging only, doesn't affect state mapping; defaults to `"claude-code"` if absent |
+| `agent`             | Which agent sent this (`"claude-code"`, `"codex"`, `"grok-build"`, `"cursor"`) — bookkeeping/logging only, doesn't affect state mapping; defaults to `"claude-code"` if absent |
 | `cwd`               | Project folder name — used for VS Code/IntelliJ window-dispatch matching (QMK pads are RGB-only, no on-device label) |
 | `tool_name`         | Distinguishes attention-worthy tools (`AskUserQuestion`, `ExitPlanMode`) and labels the slot during `PreToolUse` |
 | `notification_type` | Distinguishes `Notification` subtypes (`agent_needs_input`, `idle_prompt`, `permission_prompt`, ...) — Claude Code and Grok Build only, see [Agents tested](#agents-tested) |
@@ -669,12 +512,17 @@ and — for Codex — against real hook payloads captured from a live
 neither of the other two sends (`StopFailure`, `StopCancelled`),
 though it arrives in a different shape on the wire (camelCase fields,
 snake_case event-name values) that `grok/hook.sh` translates before
-forwarding — see its own comments, and [Wire up Grok Build
-hooks](#wire-up-grok-build-hooks) for what was confirmed live versus
-what its own docs claim. `hook_to_state()` in `daemon.py` is one
-shared mapping table across all three rather than forked per agent;
-the rows marked agent-specific above are the places they diverge —
-every other row applies to all three identically.
+forwarding — see [grok/README.md](grok/README.md) for what was
+confirmed live versus what its own docs claim. Cursor's documented
+vocabulary is broader still (it also distinguishes Shell/MCP/
+file-specific `before*`/`after*` tool-call events from a generic
+`PreToolUse`/`PostToolUse` pair), which `cursor/hook.sh` folds down
+onto this same table — confirmed live against real `agent` sessions
+for everything except MCP events; see
+[cursor/README.md](cursor/README.md). `hook_to_state()` in
+`daemon.py` is one shared mapping table across all four rather than
+forked per agent; the rows marked agent-specific above are the places
+they diverge — every other row applies to all four identically.
 
 A `PreToolUse` with no matching `PostToolUse`/`PostToolUseFailure` within
 `STALL_THRESHOLD_SECONDS` (default 10s) is escalated to `tool_stalled`
@@ -766,6 +614,7 @@ pad now works end to end:
 
 - ✅ Claude Code hook wiring (`settings.json` block + `hook.sh`)
 - ✅ Codex CLI hook wiring (`hooks.json`/`config.toml` block + `hook.sh`), verified with a real `codex exec` run
+- ✅ Cursor CLI hook wiring (`~/.cursor/hooks.json` file + `hook.sh`, translating its camelCase-valued payloads), verified end to end against real interactive `agent` sessions and `agent -p` runs: session lifecycle, session correlation, key-press dispatch, and nearly every documented event all confirmed live — only MCP events remain untested (no MCP server available), while `subagentStart`/`subagentStop` and `preCompact` were deliberately tested and confirmed to never fire — also confirmed to fire real Claude Code hooks unprompted, guarded against in `claude/hook.sh` (see [cursor/README.md](cursor/README.md))
 - ✅ Grok Build hook wiring (`~/.grok/hooks/*.json` file + `hook.sh`, translating its camelCase/snake_case-valued payloads), verified with a real `grok -p ...` run
 - ✅ Socket server + hook-event → pad-state mapping, shared across agents
 - ✅ HID protocol to/from QMK keyboards (e.g. NuPhy Air75 V2), with pad auto-discovery
