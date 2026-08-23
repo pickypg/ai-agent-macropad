@@ -49,18 +49,36 @@
 # needs to stay fast — nc's -w1 caps the connection attempt at 1s, and
 # the ps call above is skipped entirely except at SessionStart.
 #
-# Guard against foreign payloads: some agents (confirmed with Grok
-# Build) also load ~/.claude/settings.json for "Claude Code
-# compatibility" and fire this hook with their OWN native envelope
-# instead of Claude Code's — e.g. Grok Build's is camelCase
-# (hookEventName/sessionId), not this script's expected
-# hook_event_name/session_id. Forwarding that untranslated payload
-# would reach daemon.py missing session_id, get logged as a dropped
-# event, and get mislabeled agent=claude-code (this script hardcodes
-# that below) even though it's really from the other agent. Since
-# Claude Code itself always includes both fields, their absence means
-# this isn't really a Claude Code event — drop it instead of
-# forwarding garbage.
+# Guard against foreign payloads: some agents also load
+# ~/.claude/settings.json for "Claude Code compatibility" and fire
+# this hook with their OWN native envelope instead of Claude Code's.
+# Two confirmed-live cases, needing two different checks:
+#
+# 1. Grok Build's envelope is camelCase (hookEventName/sessionId), not
+#    this script's expected hook_event_name/session_id — those two
+#    fields just come back empty, caught by the emptiness check below.
+#
+# 2. Cursor CLI (confirmed live 2026-08-23) is a harder case: unlike
+#    Grok, it does NOT gate this behind the opt-in "third-party
+#    hooks"/skills setting its own docs describe (or that setting
+#    defaults to on for the CLI, unconfirmed which) — real Claude hooks
+#    fired for real Cursor sessions with no config change on this end.
+#    Worse, its payload isn't obviously foreign: it uses the real key
+#    names hook_event_name and session_id (not Grok's differently-named
+#    ones), so the emptiness check alone doesn't catch it — confirmed
+#    by a live daemon.py log showing the SAME session_id logged twice
+#    for the same real event, once via this script (event
+#    "postToolUse", agent incorrectly claude-code) and once via
+#    cursor/hook.sh (event "PostToolUse", agent correctly cursor).
+#    What DOES distinguish it: Cursor's hook_event_name *values* are
+#    its own camelCase ("postToolUse", "sessionStart", ...), never
+#    Claude Code's real PascalCase ("PostToolUse", "SessionStart",
+#    ...) — the case statement below drops anything not starting with
+#    an uppercase letter for exactly this reason. cursor/hook.sh does
+#    its own camelCase -> PascalCase translation on its copy before
+#    forwarding, so the real event still reaches the daemon correctly
+#    tagged agent=cursor either way — this guard only stops the
+#    untranslated, mistagged duplicate from claude/hook.sh.
 SOCKET="$HOME/.ai-agent-macropad/daemon.sock"
 
 input=$(cat)
@@ -69,6 +87,22 @@ session_id=$(printf '%s' "$input" | jq -r '.session_id // empty')
 if [ -z "$event" ] || [ -z "$session_id" ]; then
   exit 0
 fi
+# export (not just set) is required here, not cosmetic: [A-Z] is a
+# locale-collated bracket expression, not a hardcoded ASCII range —
+# confirmed live (2026-08-23) that under en_US.UTF-8 (apparently what
+# Cursor's interactive-mode hook subprocess is spawned with, unlike its
+# -p/print mode, which never reproduced this), "beforeSubmitPrompt"/
+# "preToolUse"/etc. WRONGLY match [A-Z]*, silently defeating this whole
+# guard — confirmed the fix by reproducing the exact false-positive
+# match under LC_ALL=en_US.UTF-8 and confirming [A-Z]* behaves
+# correctly again once LC_ALL=C is exported. A plain (non-exported)
+# LC_ALL=C is not sufficient — bash's own collation reads the real
+# process environment, not just shell-local variables.
+export LC_ALL=C
+case "$event" in
+  [A-Z]*) ;;  # looks like Claude Code's real PascalCase vocabulary
+  *) exit 0 ;;  # camelCase value under the right key name — still foreign (see above)
+esac
 
 ctty=""
 if [ "$event" = "SessionStart" ]; then

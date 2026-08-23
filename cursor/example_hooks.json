@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "sessionEnd": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "beforeSubmitPrompt": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "preToolUse": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "postToolUse": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "postToolUseFailure": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "beforeShellExecution": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "afterShellExecution": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "beforeMCPExecution": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "afterMCPExecution": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "beforeReadFile": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "afterFileEdit": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "stop": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "subagentStart": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "subagentStop": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ],
+    "preCompact": [
+      { "command": "$HOME/.ai-agent-macropad/hook-cursor.sh" }
+    ]
+  }
+}

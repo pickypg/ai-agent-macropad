@@ -8,17 +8,21 @@ Usage:
     python3 fake_hooks.py --sessions 3          # three concurrent sessions, staggered
     python3 fake_hooks.py --agent codex         # simulate a Codex CLI session instead
     python3 fake_hooks.py --agent grok-build    # simulate a Grok Build session instead
+    python3 fake_hooks.py --agent cursor        # simulate a Cursor CLI session instead
 
 --agent only changes which event sequence gets simulated (see
 simulate_session() below) and tags payloads with "agent" accordingly —
 daemon.py's own mapping logic doesn't fork per agent, so this is purely
 about exercising each agent's real event vocabulary (see
 hook_to_state()'s docstring in daemon.py for exactly where they
-diverge). All three simulators speak the shared post-translation
+diverge). All four simulators speak the shared post-translation
 PascalCase shape hook_to_state() expects — for Grok Build, that's
 already through the same camelCase/snake_case-value -> PascalCase
 translation grok/hook.sh does for a real session, not Grok's own native
-wire format.
+wire format; same idea for Cursor and cursor/hook.sh, except Cursor's
+translation is UNVERIFIED against a real `agent` run (see
+cursor/hook.sh's own comments) — this simulator is only as accurate as
+that guesswork, not a substitute for testing against the real CLI.
 """
 import argparse
 import json
@@ -172,10 +176,38 @@ def simulate_grok_build_session(base):
     send({**base, "hook_event_name": "SessionEnd"})
 
 
+def simulate_cursor_session(base):
+    # UNVERIFIED (see cursor/hook.sh's own comments) — no permission-
+    # prompt/notification-style hook is documented for Cursor at all,
+    # so unlike the other three simulators, this one never lights up
+    # "question" or "waiting". Tool call is exercised via the Shell-
+    # specific before/after pair rather than generic PreToolUse/
+    # PostToolUse, since community reports suggest that pair is more
+    # likely to actually fire for the standalone CLI in practice —
+    # cursor/hook.sh maps both onto PreToolUse/PostToolUse either way.
+    send({**base, "hook_event_name": "SessionStart"})
+    time.sleep(0.5)
+
+    send({**base, "hook_event_name": "UserPromptSubmit"})
+    time.sleep(0.5)
+
+    send({**base, "hook_event_name": "PreToolUse", "tool_name": "Shell"})
+    time.sleep(0.5)
+
+    send({**base, "hook_event_name": "PostToolUse", "tool_name": "Shell"})
+    time.sleep(0.5)
+
+    send({**base, "hook_event_name": "Stop"})  # -> done
+    time.sleep(1.0)
+
+    send({**base, "hook_event_name": "SessionEnd"})
+
+
 SIMULATORS = {
     "claude-code": simulate_claude_code_session,
     "codex": simulate_codex_session,
     "grok-build": simulate_grok_build_session,
+    "cursor": simulate_cursor_session,
 }
 
 

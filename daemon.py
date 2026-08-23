@@ -22,20 +22,28 @@ in.
 The wire protocol (one JSON object per line on the Unix socket — see
 handle_hook_event() below) isn't tied to any one agent: any hook/
 notification source that speaks it can drive a slot, as long as its
-payload carries at least hook_event_name and session_id. Three
+payload carries at least hook_event_name and session_id. Four
 adapters ship in this repo today, one per agent's own hook system —
-claude/hook.sh (Claude Code), codex/hook.sh (Codex CLI), and
-grok/hook.sh (Grok Build) — each translating its agent's native hook
-JSON into this shape and forwarding it here; see the "Agents tested"
-table in the README for which agents actually have one. Each adapter
-tags its payload with an "agent" field (see Daemon.session_agents
-below) purely for logging/bookkeeping — it has no effect on how an
-event maps to a pad state. Claude Code's and Codex's hook event
-vocabularies overlap almost entirely (same event names, same core
-fields); Grok Build's overlaps too, but arrives in a different shape
-(camelCase fields, snake_case event-name values) that grok/hook.sh
-translates before forwarding — see its own comments. hook_to_state()
-below is one shared mapping table across all three rather than forked
+claude/hook.sh (Claude Code), codex/hook.sh (Codex CLI), grok/hook.sh
+(Grok Build), and cursor/hook.sh (Cursor CLI, unverified — see its own
+comments) — each translating its agent's native hook JSON into this
+shape and forwarding it here; see the "Agents tested" table in the
+README for which agents actually have one. Each adapter tags its
+payload with an "agent" field (see Daemon.session_agents below) purely
+for logging/bookkeeping — it has no effect on how an event maps to a
+pad state. Claude Code's and Codex's hook event vocabularies overlap
+almost entirely (same event names, same core fields); Grok Build's
+overlaps too, but arrives in a different shape (camelCase fields,
+snake_case event-name values) that grok/hook.sh translates before
+forwarding — see its own comments. Cursor's own event names are
+camelCase values ("sessionStart", "preToolUse", ...) that cursor/
+hook.sh translates to this same PascalCase vocabulary, plus a handful
+of Shell/MCP/file-specific event pairs (beforeShellExecution/
+afterShellExecution, ...) folded into the generic PreToolUse/
+PostToolUse pair — see cursor/hook.sh's own comments for why, and for
+the real uncertainty around which of Cursor's documented events an
+actual `agent` (Cursor CLI) session sends in practice. hook_to_state()
+below is one shared mapping table across all four rather than forked
 per agent; see its docstring for the handful of places they diverge.
 
 The HID handle is only held open while at least one agent session is
@@ -160,6 +168,13 @@ def hook_to_state(event_name, tool_name=None, notification_type=None):
       - Notification (and its agent_needs_input/idle_prompt subtypes,
         Claude Code's own extension) has no Codex equivalent — Codex
         tool calls needing your input surface only via PermissionRequest.
+
+    Cursor (translated by cursor/hook.sh from its own camelCase event
+    names — see its own comments) has neither PermissionRequest nor
+    Notification: no hook in Cursor's published reference signals "a
+    permission UI is waiting on you" at all, so "question" and
+    "waiting" never fire for a Cursor session today — a bigger gap
+    than even Codex's.
 
     AskUserQuestion and ExitPlanMode are special-cased: both are
     PreToolUse events, but both mean Claude is blocked on the user
@@ -515,9 +530,10 @@ class Daemon:
         # Terminal.app tab this session is running in — an exact
         # match, unlike VS Code's fuzzy title substring match.
         self.session_ttys = {}
-        # session_id -> agent name (e.g. "claude-code", "codex"), from
-        # the payload's own "agent" field (each adapter script tags its
-        # own — see claude/hook.sh and codex/hook.sh). Bookkeeping only,
+        # session_id -> agent name (e.g. "claude-code", "codex",
+        # "grok-build", "cursor"), from the payload's own "agent" field
+        # (each adapter script tags its own — see claude/hook.sh,
+        # codex/hook.sh, grok/hook.sh, cursor/hook.sh). Bookkeeping only,
         # for logs — it never affects slot allocation, state mapping, or
         # what's sent to the pad, all of which are already agent-
         # agnostic. Defaults to "claude-code" for payloads that predate
