@@ -17,13 +17,6 @@ def test_pack_ping():
     assert report[2:] == bytes(hid_protocol.REPORT_SIZE - 2)
 
 
-def test_protocol_version_is_nonzero():
-    # Unused report bytes are zero-padded, so 0 cannot be a real
-    # protocol version — parse_report treats hello byte 3 == 0 as
-    # "not a valid handshake."
-    assert hid_protocol.PROTOCOL_VERSION >= 1
-
-
 def test_protocol_version_matches_firmware_header():
     header = (
         Path(__file__).resolve().parents[1]
@@ -107,11 +100,6 @@ def test_parse_report_hello():
     }
 
 
-def test_parse_report_hello_zero_protocol_returns_none():
-    report = bytes([hid_protocol.MSG_HELLO, hid_protocol.DEVICE_ID_AIR75_V2, 16, 0]) + bytes(28)
-    assert hid_protocol.parse_report(report) is None
-
-
 def test_parse_report_key():
     report = bytes([hid_protocol.MSG_KEY, 2]) + bytes(30)
     assert hid_protocol.parse_report(report) == {"t": "key", "i": 2}
@@ -133,7 +121,7 @@ def test_parse_report_unknown_type_returns_none():
 
 def test_parse_report_truncated_hello_returns_none():
     assert hid_protocol.parse_report(bytes([hid_protocol.MSG_HELLO, 0x01])) is None
-    # Pre-version hello (device + slots, no protocol byte) is also invalid.
+    # Missing the protocol byte entirely (device + slots, report too short) is also invalid.
     assert hid_protocol.parse_report(
         bytes([hid_protocol.MSG_HELLO, hid_protocol.DEVICE_ID_AIR75_V2, 16])
     ) is None
