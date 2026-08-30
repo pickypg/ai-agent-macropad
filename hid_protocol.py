@@ -127,6 +127,25 @@ DEVICE_ID_AIR75_V2 = 0xA7
 # keymap's and the README's Keychron K1 Pro section for why.
 DEVICE_ID_K1_PRO = 0xC1
 
+# Keychron K3 Ultra 8K (ANSI) — the actual target hardware (see
+# zmk_plan.md). VID/PID confirmed 2026-08-26 via hid.enumerate() against
+# a real unit's stock firmware; the stock firmware itself does not
+# speak this protocol (no ZMK shield exists for it yet — see
+# zmk-config/README.md), so this id is only meaningful once custom
+# firmware is actually flashed.
+DEVICE_ID_K3_ULTRA_8K = 0xC2
+
+# Keychron Q3 Ultra 8K (ANSI) — ZMK bring-up stand-in for the K3 Ultra
+# 8K target hardware (see zmk_plan.md). Keychron has published a real,
+# buildable ZMK shield for the Q3 Ultra 8K (app/boards/shields/
+# keychron_q3_ultra_ansi on github.com/Keychron/zmk's rtl8762g branch);
+# no equivalent K3 Ultra 8K shield exists yet, so Phase 1 targets this
+# board first to prove the raw-HID ping/hello round trip on real
+# Keychron ZMK firmware before any K3 Ultra-specific reverse
+# engineering happens. Not confirmed against real hardware yet — see
+# zmk-config/README.md.
+DEVICE_ID_Q3_ULTRA_8K = 0xC3
+
 # Single source of truth for every known QMK HID pad's identity: `vid`/
 # `pid` for USB discovery (pad_link.discover_hid_pad()), `device_id`
 # for the MSG_HELLO handshake byte above. pad_link.py and
@@ -137,10 +156,22 @@ KnownPad = namedtuple("KnownPad", ["name", "vid", "pid", "device_id"])
 NUPHY_AIR75_V2 = KnownPad("NuPhy Air75 V2 (ANSI)", 0x19F5, 0x3246, DEVICE_ID_AIR75_V2)
 KEYCHRON_K1_PRO = KnownPad("Keychron K1 Pro (ANSI)", 0x3434, 0x0210, DEVICE_ID_K1_PRO)
 
+# Confirmed 2026-08-26 via hid.enumerate() against a real unit's stock
+# firmware (product string "Keychron K3 Ultra 8K"). Stock firmware
+# won't answer this protocol's handshake — see DEVICE_ID_K3_ULTRA_8K —
+# but discovery/open will still succeed against it, since the raw-HID
+# interface (usage page 0xFF60 / usage 0x61) is already present.
+KEYCHRON_K3_ULTRA_8K = KnownPad("Keychron K3 Ultra 8K (ANSI)", 0x3434, 0x1630, DEVICE_ID_K3_ULTRA_8K)
+
+# VID/PID confirmed from Keychron's own published shield config
+# (keychron_q3_ultra_ansi.conf: CONFIG_USB_DEVICE_VID/PID) — not yet
+# confirmed by probing real hardware over USB.
+KEYCHRON_Q3_ULTRA_8K = KnownPad("Keychron Q3 Ultra 8K (ANSI)", 0x3434, 0x1230, DEVICE_ID_Q3_ULTRA_8K)
+
 # Tried in this order by daemon.py's discover_hid_pad() — add a new
 # KnownPad here for any future board rather than hardcoding its VID/PID
 # somewhere else.
-KNOWN_HID_PADS = (NUPHY_AIR75_V2, KEYCHRON_K1_PRO)
+KNOWN_HID_PADS = (NUPHY_AIR75_V2, KEYCHRON_K1_PRO, KEYCHRON_K3_ULTRA_8K, KEYCHRON_Q3_ULTRA_8K)
 
 
 def pack_ping():

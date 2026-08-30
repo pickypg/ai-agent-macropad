@@ -1,0 +1,28 @@
+diff --git a/app/boards/shields/clueboard_california/Kconfig.defconfig b/app/boards/shields/clueboard_california/Kconfig.defconfig
+index 278aaa44..1f8adc8c 100644
+--- a/app/boards/shields/clueboard_california/Kconfig.defconfig
++++ b/app/boards/shields/clueboard_california/Kconfig.defconfig
+@@ -9,6 +9,7 @@ config ZMK_KEYBOARD_NAME
+ # interrutps for multiple controllers for the same "line"
+ # for the external interrupts.
+ config ZMK_KSCAN_DIRECT_POLLING
++    bool
+     default y
+ 
+ endif
+diff --git a/app/src/behaviors/behavior_keychron.c b/app/src/behaviors/behavior_keychron.c
+index e30fee18..215b0769 100644
+--- a/app/src/behaviors/behavior_keychron.c
++++ b/app/src/behaviors/behavior_keychron.c
+@@ -536,4 +536,8 @@ void winlock_led_set(void) {
+ }
+ #endif
+ 
+-uint8_t get_charge_state(void) { return bat_charge_state; }
+\ No newline at end of file
++#if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
++uint8_t get_charge_state(void) { return bat_charge_state; }
++#else
++uint8_t get_charge_state(void) { return 0; }
++#endif
+\ No newline at end of file

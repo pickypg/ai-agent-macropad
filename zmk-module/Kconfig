@@ -1,0 +1,51 @@
+# Kconfig fragment for this repo's Zephyr module (see ../zephyr/module.yml).
+# Pulled in automatically once this repo is added as a west project in a
+# ZMK west workspace — see zmk-config/README.md.
+
+config AI_AGENT_MACROPAD_HID
+    bool "AI Agent Macropad raw-HID protocol listener"
+    depends on RAW_HID
+    help
+      Answers hid_protocol.py's MSG_PING with a MSG_HELLO reply over
+      zzeneg/zmk-raw-hid's raw_hid_received_event / raw_hid_sent_event.
+      Phase 1 only: the handshake, not yet MSG_SLOT (RGB) or
+      MSG_KEY/MSG_KEY_HELD.
+
+# Stub definitions, NOT a real fix: Keychron's own keychron_q3_ultra_ansi.conf
+# sets CONFIG_CKLED2001=y / CONFIG_CKLED2001_SPI=y (their per-key RGB driver
+# chip), but neither symbol is defined anywhere in Keychron's public zmk/
+# zephyr forks -- Zephyr's Kconfig parser hard-fails the build ("Aborting due
+# to Kconfig warnings") on an assignment to an undefined symbol, so the build
+# cannot proceed at all without this. Defining them as plain bools here only
+# silences that abort; the actual CKLED2001 driver source is presumably
+# missing too, so RGB stays non-functional regardless -- fine for Phase 1
+# (raw-HID ping/hello only; MSG_SLOT/RGB is Phase 2), not a real fix. Drop
+# this the moment Keychron publishes the real driver Kconfig.
+config CKLED2001
+    bool "Stub for Keychron's undefined CKLED2001 RGB driver symbol"
+
+config CKLED2001_SPI
+    bool "Stub for Keychron's undefined CKLED2001_SPI RGB driver symbol"
+
+if AI_AGENT_MACROPAD_HID
+
+config AI_AGENT_MACROPAD_DEVICE_ID
+    hex "Device id byte reported in MSG_HELLO"
+    default 0xC3
+    help
+      Must match one of hid_protocol.py's DEVICE_ID_* constants — the
+      host's discover_hid_pad() uses this byte to identify which known
+      pad answered. 0xC3 is DEVICE_ID_Q3_ULTRA_8K, the Phase 1 bring-up
+      target (see zmk-config/README.md for why K3 Ultra 8K itself
+      isn't buildable yet).
+
+config AI_AGENT_MACROPAD_NUM_SLOTS
+    int "Number of slots reported in MSG_HELLO"
+    default 4
+    help
+      Hard-coded for Phase 1 (no VIA-equivalent dynamic slot->key
+      scanning yet) — matches the 4 corner-cluster keys (PageUp/
+      PageDn/Home/End equivalents) used as the initial slot mapping on
+      the QMK side.
+
+endif # AI_AGENT_MACROPAD_HID

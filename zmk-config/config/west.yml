@@ -1,0 +1,31 @@
+manifest:
+  remotes:
+    - name: keychron
+      url-base: https://github.com/Keychron
+    - name: zzeneg
+      url-base: https://github.com/zzeneg
+    - name: pickypg
+      url-base: https://github.com/pickypg
+  projects:
+    # Keychron's own ZMK fork, not upstream zmkfirmware/zmk: the
+    # keychron_*_ultra_ansi shields (Q1/Q3/Q6, V0-V10, Z270) only exist
+    # on this branch, and app/west.yml here itself points at Keychron's
+    # own Zephyr fork (below) rather than mainline Zephyr, because
+    # mainline has no Realtek RTL8762G support at all. See
+    # zmk-config/README.md's Status section before assuming this
+    # builds cleanly.
+    - name: zmk
+      remote: keychron
+      revision: rtl8762g
+      import: app/west.yml
+    - name: zmk-raw-hid
+      remote: zzeneg
+      revision: main
+    # This repo, again: zephyr/module.yml at its root registers
+    # zmk-module/ as a Zephyr module providing the MSG_PING/MSG_HELLO
+    # listener in zmk-module/src/ai_agent_macropad_hid.c.
+    - name: ai-agent-macropad
+      remote: pickypg
+      revision: main
+  self:
+    path: config

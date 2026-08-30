@@ -1,0 +1,14 @@
+---
+# Phase 1 bring-up target: Keychron Q3 Ultra 8K, standing in for the
+# K3 Ultra 8K (no public shield exists for that board yet — see
+# README.md's Status section). "board: keychron" + the RTL8762G Zephyr
+# fork it pulls in via config/west.yml is Keychron's own combo, taken
+# from their CI workflow (.github/workflows/zmk_build.yml on the
+# rtl8762g branch) — NOT independently confirmed to work with the
+# *product* shield below, only with their generic rtl8762gn_evb +
+# rtk_keyboard smoke-test target. Unverified — see README.md.
+include:
+  - board: keychron
+    shield: keychron_q3_ultra_ansi raw_hid_adapter
+    cmake-args: -DEXTRA_CONF_FILE="${ZMK_CONFIG}/ai_agent_macropad.conf"
+    artifact-name: keychron_q3_ultra_8k_ai_agent_macropad

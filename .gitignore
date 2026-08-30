@@ -50,7 +50,6 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
-<<<<<<< HEAD
 cover/
 
 # Translations
@@ -234,3 +233,18 @@ events.log
 qmk-userspace/*.bin
 qmk-userspace/*.hex
 qmk-userspace/*.uf2
+
+# ZMK west workspace (zmk-config/README.md) — `west update` clones
+# Keychron's ZMK/Zephyr forks plus every Zephyr HAL module directly
+# into zmk-config/ (~2.6GB, each with its own nested .git), and the
+# build/ dir and .venv are local-only too. Only the manifest, build
+# target, patch, and our own module source are meant to be tracked.
+zmk-config/.venv/
+zmk-config/.west/
+zmk-config/build/
+zmk-config/zmk/
+zmk-config/zephyr/
+zmk-config/zmk-raw-hid/
+zmk-config/modules/
+zmk-config/ai-agent-macropad/
+zmk-config/bootloader/

@@ -1,0 +1,4 @@
+name: ai-agent-macropad
+build:
+  cmake: zmk-module
+  kconfig: zmk-module/Kconfig

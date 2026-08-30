@@ -116,7 +116,7 @@ def main():
             f"hello: device={reply['device']} slots={reply['slots']} "
             f"protocol={reply.get('protocol')}"
         )
-        known_device_ids = (hid_protocol.DEVICE_ID_AIR75_V2, hid_protocol.DEVICE_ID_K1_PRO)
+        known_device_ids = tuple(pad.device_id for pad in hid_protocol.KNOWN_HID_PADS)
         if reply["device"] not in known_device_ids:
             print(f"WARNING: unexpected device id {reply['device']!r}")
         protocol = reply["protocol"]
