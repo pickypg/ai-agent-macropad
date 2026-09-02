@@ -23,6 +23,12 @@ small source patch applied before it'll build; see [QMK keyboard
 (Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified)
 before relying on it.
 
+A third QMK board, the [Keychron K0
+Max](https://www.keychron.com/products/keychron-k0-max-qmk-wireless-custom-number-pad)
+(RGB numpad), is wired up against Keychron's `2025q3` firmware source.
+It has been compiled, flashed, and HID-verified on a live RGB board —
+see [QMK keyboard (Keychron K0 Max)](#qmk-keyboard-keychron-k0-max).
+
 This repo covers the full path end to end: per-agent hook wiring (an
 example settings file, the adapter script it invokes, and a setup
 guide — one trio per agent, under `claude/`, `codex/`, `grok/`, and
@@ -98,10 +104,10 @@ been tried.
 | `daemon.py`                         | Host-side daemon: Unix socket server + hook-event → pad-state mapping + idle-release orchestration        |
 | `pad_link.py`                       | Owns the HID connection to the pad: discovery, open/close, read/write, reconnection                       |
 | `hid_protocol.py`                   | Wire-level binary report format for the HID transport (QMK-based pads) — see [Protocol](#protocol)        |
-| `Makefile`                          | Repeatable QMK compile: stamps protocol version + QMK-fork/overlay git hashes into the `.bin` name (`make nuphy-air75-v2`, `make keychron-k1-pro`) |
+| `Makefile`                          | Repeatable QMK compile: stamps protocol version + QMK-fork/overlay git hashes into the `.bin` name (`make nuphy-air75-v2`, `make keychron-k1-pro`, `make keychron-k0-max`) |
 | `fake_hooks.py`                     | Simulates an agent session's hook events (Claude Code by default, `--agent codex` for Codex's own event shape), for testing the daemon without real hooks wired up |
 | `hid_bringup_test.py`               | Standalone hello/RGB round-trip check against a real QMK pad, independent of `daemon.py`                  |
-| `qmk-userspace/`                    | QMK userspace overlay, built against a separate local QMK checkout — `users/ai_agent_macropad/` holds the protocol/state logic shared by every board's keymap; `keyboards/.../keymaps/ai_agent_macropad/` holds each board's own layout, LED map, and device ID. Keychron K1 Pro also ships `keyboards/keychron/k1_pro/k1_pro.c.patch`, a small patch applied to that board's own (unmodified-otherwise) firmware checkout — see [QMK keyboard (Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified) for why |
+| `qmk-userspace/`                    | QMK userspace overlay, built against a separate local QMK checkout — `users/ai_agent_macropad/` holds the protocol/state logic shared by every board's keymap; `keyboards/.../keymaps/ai_agent_macropad/` holds each board's own layout, LED map, and device ID. Keychron boards also ship a small firmware-checkout patch (`k1_pro.c.patch` / `keychron_raw_hid.c.patch`) so the keymap can hook raw HID — see each board's section below |
 | `requirements.txt`                  | Python dependencies for the daemon                                                                        |
 | `requirements-dev.txt`              | Adds `pytest` on top of `requirements.txt`, for running the test suite                                    |
 | `tests/`                            | `pytest` suite for `daemon.py`, `pad_link.py`, and `hid_protocol.py` (see [Testing](#testing))             |
@@ -151,6 +157,10 @@ porting to a different board. A [Keychron K1
 Pro](https://www.keychron.com/products/keychron-k1-pro-qmk-via-wireless-custom-mechanical-keyboard)
 (ANSI) keymap is also included, but unverified — see [QMK keyboard
 (Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified).
+A [Keychron K0
+Max](https://www.keychron.com/products/keychron-k0-max-qmk-wireless-custom-number-pad)
+RGB numpad keymap is included too, compiled and HID-verified on a live
+board — see [QMK keyboard (Keychron K0 Max)](#qmk-keyboard-keychron-k0-max).
 
 ## Setup
 
@@ -238,6 +248,68 @@ HID protocol and `dispatch_bring_to_front` logic itself is shared code in
 `ai_agent_macropad` (i.e. still `-km ai_agent_macropad`) so QMK's build picks up that shared
 `users/ai_agent_macropad/` directory automatically.
 
+#### QMK keyboard (Keychron K0 Max)
+
+Verified against a live RGB K0 Max: VID/PID (`0x3434`/`0x0A06`) match
+Keychron's `keyboards/keychron/k0_max/keyboard.json` on
+[`2025q3`](https://github.com/Keychron/qmk_firmware/tree/2025q3), the
+keymap compiles and flashes, and `hid_bringup_test.py` cycles M1–M5
+through every state. Daemon and hook wiring are the shared stack used
+by the Air75.
+
+RGB numpad with a left-hand macro column (M1–M5) and a rotary encoder.
+5 slots wired by default (M1–M5), each showing one AI agent session's
+state via per-key RGB. Pressing one brings that session's window to
+the front. Stock M5 was the Fn layer key; this keymap moves Fn onto
+the encoder click so all five M-keys can be slots. Encoder rotate
+stays volume; mute is Fn+0 (hold the encoder, tap 0). AI_AGENT_KEY_5..11
+exist as valid keycodes and can be dragged onto spare keys in VIA.
+Stock legends are not shine-through; status colors still read on the
+M-keys.
+
+This board's firmware lives on Keychron's `2025q3` branch, **not** the
+`wireless_playground` branch used for the K1 Pro — clone it into a
+separate directory so the two checkouts don't collide. `2025q3` already
+defines a strong `via_command_kb()` in
+`keyboards/keychron/common/keychron_raw_hid.c`, so the keymap can't
+hook that symbol itself — apply the small patch below first
+(`raw_hid_receive_kb()` fallthrough, same idea as the K1 Pro patch,
+different file).
+
+```
+git clone --depth 1 --branch 2025q3 https://github.com/Keychron/qmk_firmware.git ../keychron-qmk-firmware-2025q3
+cd ../keychron-qmk-firmware-2025q3 && git submodule update --init --recursive
+brew install qmk/qmk/qmk dfu-util
+# STM32L432: Homebrew's `arm-none-eabi-gcc` is missing newlib headers
+# (`stdint.h: No such file or directory`). Use ARM's toolchain instead:
+#   brew install --cask gcc-arm-embedded
+#   brew unlink arm-none-eabi-gcc   # if the Homebrew formula is already installed
+
+git apply ../ai-agent-macropad/qmk-userspace/keyboards/keychron/k0_max/keychron_raw_hid.c.patch
+
+cd ../ai-agent-macropad
+make keychron-k0-max
+# KEYCHRON_MAX_QMK=/path/to/keychron-qmk-firmware-2025q3 make keychron-k0-max
+```
+
+This repo does not flash. Enter bootloader in Cable mode: hold the
+top-row key next to the knob (stock Esc) *or* the reset button under
+the 0 key, then plug in USB-C — see [Keychron's own
+readme](https://github.com/Keychron/qmk_firmware/blob/2025q3/keyboards/keychron/k0_max/readme.md).
+Flash the `.bin` with
+[qmk-browser-flasher](https://github.com/pickypg/qmk-browser-flasher).
+
+Then verify the wire protocol directly —
+`python3 hid_bringup_test.py` — and only move on once you've watched
+M1–M5 cycle through every state.
+
+Slot wiring, VIA reassignment, and the VIA/daemon exclusivity rule are
+all the same as [the Air75 board above](#qmk-keyboard-nuphy-air75-v2).
+Load [this board's
+`via.json`](qmk-userspace/keyboards/keychron/k0_max/keymaps/ai_agent_macropad/via.json)
+in VIA's Design tab. The HID protocol must run over USB-C; Bluetooth
+and 2.4 GHz will not carry it.
+
 #### QMK keyboard (Keychron K1 Pro, unverified)
 
 **Unverified on real hardware.** Unlike the Air75 keymap above, nobody has built, flashed, or
@@ -310,7 +382,7 @@ python3 daemon.py
 
 The daemon auto-detects the pad (`pad_link.discover_hid_pad()`),
 trying each board in `hid_protocol.KNOWN_HID_PADS` (NuPhy Air75 V2,
-Keychron K1 Pro) in turn — sending each candidate raw-HID interface a
+Keychron K0 Max, Keychron K1 Pro) in turn — sending each candidate raw-HID interface a
 ping and attaching to whichever one answers hello first via
 `discover_hid_device()`. No need to look up device paths by hand or
 update them after a replug.
@@ -623,6 +695,9 @@ pad now works end to end:
 - ✅ Hold a slot key 5s to manually clear a stale session mapping (e.g. a crashed session, or a duplicate VS Code window), freeing the slot for a new session
 - ✅ Startup seeding of already-running sessions — `claude agents --json` (Claude Code) or `~/.grok/active_sessions.json` (Grok Build); Codex has neither, see [Agents tested](#agents-tested)
 - ✅ Idle-release: the pad connection closes when no session is active, freeing it for VIA
+- ✅ Keychron K0 Max QMK keymap — compiled, flashed, and HID-verified on a live RGB board
+  (`hid_bringup_test.py` cycles M1–M5); see [QMK keyboard (Keychron K0
+  Max)](#qmk-keyboard-keychron-k0-max)
 - ⚠️ Keychron K1 Pro (ANSI) QMK keymap — written against Keychron's own official firmware
   source, unverified on real hardware (see [QMK keyboard (Keychron K1 Pro,
   unverified)](#qmk-keyboard-keychron-k1-pro-unverified))

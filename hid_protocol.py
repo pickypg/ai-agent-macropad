@@ -125,8 +125,14 @@ CODE_TO_STATE = {v: k for k, v in STATE_TO_CODE.items()}
 # Confirmed against NuPhy's own keyboard.json during Phase 0.
 DEVICE_ID_AIR75_V2 = 0xA7
 
+# Keychron K0 Max (RGB numpad) — see qmk-userspace/keyboards/keychron/k0_max/
+# keymaps/ai_agent_macropad/keymap.c. VID/PID (0x3434/0x0A06) and
+# DEVICE_ID confirmed against a live board; see the README's Keychron
+# K0 Max section.
+DEVICE_ID_K0_MAX = 0xC0
+
 # Keychron K1 Pro (ANSI) — see qmk-userspace/keyboards/keychron/k1_pro/
-# ansi/rgb/keymaps/claude_macropad/keymap.c. Unlike DEVICE_ID_AIR75_V2,
+# ansi/rgb/keymaps/ai_agent_macropad/keymap.c. Unlike DEVICE_ID_AIR75_V2,
 # this one hasn't been confirmed against real hardware — see that
 # keymap's and the README's Keychron K1 Pro section for why.
 DEVICE_ID_K1_PRO = 0xC1
@@ -139,12 +145,13 @@ DEVICE_ID_K1_PRO = 0xC1
 KnownPad = namedtuple("KnownPad", ["name", "vid", "pid", "device_id"])
 
 NUPHY_AIR75_V2 = KnownPad("NuPhy Air75 V2 (ANSI)", 0x19F5, 0x3246, DEVICE_ID_AIR75_V2)
+KEYCHRON_K0_MAX = KnownPad("Keychron K0 Max", 0x3434, 0x0A06, DEVICE_ID_K0_MAX)
 KEYCHRON_K1_PRO = KnownPad("Keychron K1 Pro (ANSI)", 0x3434, 0x0210, DEVICE_ID_K1_PRO)
 
 # Tried in this order by daemon.py's discover_hid_pad() — add a new
 # KnownPad here for any future board rather than hardcoding its VID/PID
 # somewhere else.
-KNOWN_HID_PADS = (NUPHY_AIR75_V2, KEYCHRON_K1_PRO)
+KNOWN_HID_PADS = (NUPHY_AIR75_V2, KEYCHRON_K0_MAX, KEYCHRON_K1_PRO)
 
 
 def pack_ping():

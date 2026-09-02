@@ -9,6 +9,13 @@ def test_report_size_matches_qmk_raw_epsize():
     assert hid_protocol.REPORT_SIZE == 32
 
 
+def test_known_hid_pads_include_k0_max():
+    assert hid_protocol.KEYCHRON_K0_MAX.vid == 0x3434
+    assert hid_protocol.KEYCHRON_K0_MAX.pid == 0x0A06
+    assert hid_protocol.KEYCHRON_K0_MAX.device_id == hid_protocol.DEVICE_ID_K0_MAX
+    assert hid_protocol.KEYCHRON_K0_MAX in hid_protocol.KNOWN_HID_PADS
+
+
 def test_pack_ping():
     report = hid_protocol.pack_ping()
     assert len(report) == hid_protocol.REPORT_SIZE

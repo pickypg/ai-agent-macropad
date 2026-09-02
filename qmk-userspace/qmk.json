@@ -2,6 +2,7 @@
     "userspace_version": "1.0",
     "build_targets": [
         ["nuphy/air75_v2/ansi", "ai_agent_macropad"],
-        ["keychron/k1_pro/ansi/rgb", "ai_agent_macropad"]
+        ["keychron/k1_pro/ansi/rgb", "ai_agent_macropad"],
+        ["keychron/k0_max", "ai_agent_macropad"]
     ]
 }

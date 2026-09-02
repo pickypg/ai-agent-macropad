@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Minimal hello/RGB/key-press round-trip test against a real QMK pad
-(NuPhy Air75 V2 or Keychron K1 Pro — see hid_protocol.KNOWN_HID_PADS),
+(NuPhy Air75 V2, Keychron K0 Max, or Keychron K1 Pro — see hid_protocol.KNOWN_HID_PADS),
 independent of daemon.py's threading/discovery machinery — "Blink
 before Renderer": prove the wire protocol actually works on real
 hardware before trusting the full daemon stack to it.
@@ -116,7 +116,11 @@ def main():
             f"hello: device={reply['device']} slots={reply['slots']} "
             f"protocol={reply.get('protocol')}"
         )
-        known_device_ids = (hid_protocol.DEVICE_ID_AIR75_V2, hid_protocol.DEVICE_ID_K1_PRO)
+        known_device_ids = (
+            hid_protocol.DEVICE_ID_AIR75_V2,
+            hid_protocol.DEVICE_ID_K0_MAX,
+            hid_protocol.DEVICE_ID_K1_PRO,
+        )
         if reply["device"] not in known_device_ids:
             print(f"WARNING: unexpected device id {reply['device']!r}")
         protocol = reply.get("protocol")
