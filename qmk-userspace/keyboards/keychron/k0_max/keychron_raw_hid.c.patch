@@ -1,0 +1,41 @@
+diff --git a/keyboards/keychron/common/keychron_raw_hid.c b/keyboards/keychron/common/keychron_raw_hid.c
+index b3657af..99ec053 100644
+--- a/keyboards/keychron/common/keychron_raw_hid.c
++++ b/keyboards/keychron/common/keychron_raw_hid.c
+@@ -128,6 +128,8 @@ void kc_raw_hid_send(uint8_t src, uint8_t *data, uint8_t len) {
+ #    endif
+ }
+ 
++__attribute__((weak)) bool raw_hid_receive_kb(uint8_t *data, uint8_t length);
++
+ bool kc_raw_hid_rx(uint8_t src, uint8_t *data, uint8_t length) {
+ #    if defined(ANANLOG_MATRIX) && defined(VIA_ENABLE)
+     if (src == RAW_HID_SRC_USB && data[0] == id_get_keyboard_value && data[1] == id_switch_matrix_state) {
+@@ -264,13 +266,26 @@ bool kc_raw_hid_rx(uint8_t src, uint8_t *data, uint8_t length) {
+ 
+ #    endif
+         default:
+-            return false;
++            return raw_hid_receive_kb(data, length);
+     }
+ 
+     kc_raw_hid_send(src, data, length);
+     return true;
+ }
+ 
++// Default no-op: only exists so kc_raw_hid_rx()'s default case above has
++// something to call regardless of which keymap is being built. A keymap
++// that wants to handle raw HID command IDs this common handler doesn't
++// already claim can define its own strong raw_hid_receive_kb() to
++// override this weak one — same override convention QMK itself uses
++// for via_command_kb() one level up. Added for ai-agent-macropad; see
++// that repo's Keychron K0 Max section. 2025q3 already defines a strong
++// via_command_kb() in this file, so a keymap can't hook that symbol
++// itself.
++__attribute__((weak)) bool raw_hid_receive_kb(uint8_t *data, uint8_t length) {
++    return false;
++}
++
+ #    if defined(VIA_ENABLE)
+ bool via_command_kb(uint8_t src, uint8_t *data, uint8_t length) {
+     return kc_raw_hid_rx(src, data, length);

@@ -4,7 +4,7 @@ AI Agent Macropad daemon.
 
 Listens for hook events on a Unix socket, maintains the
 session_id -> pad slot mapping, and mirrors state to a QMK-based pad
-over USB HID (e.g. a NuPhy Air75 V2 or Keychron K1 Pro) — see
+over USB HID (e.g. a NuPhy Air75 V2, Keychron K0 Max, or Keychron K1 Pro) — see
 pad_link.HidPadLink. Also reads key/encoder events back from the pad
 and dispatches a key press to bring that session's window to the
 front — see Daemon.dispatch_bring_to_front().
