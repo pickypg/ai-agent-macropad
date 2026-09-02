@@ -134,6 +134,11 @@ void ai_agent_macropad_scan_slots(uint16_t slot_key_base, uint8_t num_slots);
 void ai_agent_macropad_track_via_remap(uint8_t *data, uint8_t length, uint16_t slot_key_base, uint8_t num_slots);
 #endif
 
+// Override which RGB LED a slot paints after init/scan. `led` is a
+// rgb_matrix index, or NO_LED to stop painting that slot.
+void ai_agent_macropad_set_slot_led(uint8_t index, uint8_t led);
+uint8_t ai_agent_macropad_get_slot_led(uint8_t index);
+
 // Call from raw_hid_receive() on boards without VIA_ENABLE, or from
 // via_command_kb() on boards with it (via_command_kb() runs before
 // VIA's own dispatch and, per its contract, a `true` return means the

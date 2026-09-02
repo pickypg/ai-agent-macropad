@@ -252,22 +252,22 @@
     },
     {
       "name": "AI Slot 0",
-      "title": "AI agent session slot 0",
+      "title": "AI agent session slot 0 (circle / stock Esc)",
       "shortName": "AI0"
     },
     {
       "name": "AI Slot 1",
-      "title": "AI agent session slot 1",
+      "title": "AI agent session slot 1 (triangle / stock Del)",
       "shortName": "AI1"
     },
     {
       "name": "AI Slot 2",
-      "title": "AI agent session slot 2",
+      "title": "AI agent session slot 2 (square / stock Tab)",
       "shortName": "AI2"
     },
     {
       "name": "AI Slot 3",
-      "title": "AI agent session slot 3",
+      "title": "AI agent session slot 3 (X / stock Bksp)",
       "shortName": "AI3"
     },
     {

@@ -253,19 +253,27 @@ HID protocol and `dispatch_bring_to_front` logic itself is shared code in
 Verified against a live RGB K0 Max: VID/PID (`0x3434`/`0x0A06`) match
 Keychron's `keyboards/keychron/k0_max/keyboard.json` on
 [`2025q3`](https://github.com/Keychron/qmk_firmware/tree/2025q3), the
-keymap compiles and flashes, and `hid_bringup_test.py` cycles M1–M5
-through every state. Daemon and hook wiring are the shared stack used
-by the Air75.
+keymap compiles and flashes, and `hid_bringup_test.py` cycles the
+four top-row shape keys through every state. Daemon and hook wiring
+are the shared stack used by the Air75.
 
-RGB numpad with a left-hand macro column (M1–M5) and a rotary encoder.
-5 slots wired by default (M1–M5), each showing one AI agent session's
-state via per-key RGB. Pressing one brings that session's window to
-the front. Stock M5 was the Fn layer key; this keymap moves Fn onto
-the encoder click so all five M-keys can be slots. Encoder rotate
-stays volume; mute is Fn+0 (hold the encoder, tap 0). AI_AGENT_KEY_5..11
-exist as valid keycodes and can be dragged onto spare keys in VIA.
-Stock legends are not shine-through; status colors still read on the
-M-keys.
+RGB numpad with a left-hand macro column and a rotary encoder. 4 slots
+wired by default on the top-row shape keys (stock Esc / Del / Tab /
+Bksp — circle / triangle / square / X in the printed manual). Each
+shows one AI agent session's state via per-key RGB; pressing one
+brings that session's window to the front. **M5 stays `MO(FN)`**, same
+as stock, so Bluetooth pairing and lighting still work. Hold M5 and
+tap 0 (or click the encoder) to suppress the numpad rainbow — slot
+colors stay on; stock `UG_TOGG` would disable the RGB engine and take
+the slots with it. Hold M5 and tap Num Lock to cycle effects (and
+bring the rainbow back). M1–M4 stay stock macros; encoder rotate is
+volume; encoder click is mute. AI_AGENT_KEY_4..11 exist as valid
+keycodes and can be dragged onto spare keys in VIA. Stock legends are
+not shine-through, and the top-row LEDs face up with nothing above
+them, so slot colors are painted on the row below (Num Lock `/` `*`
+`-`) where they catch those keycaps. The shape keys still send the
+slot presses. Num Lock's own indicator shares the first of those four
+LEDs — if slot 0 looks stuck white, Num Lock is on.
 
 This board's firmware lives on Keychron's `2025q3` branch, **not** the
 `wireless_playground` branch used for the K1 Pro — clone it into a
@@ -292,16 +300,51 @@ make keychron-k0-max
 # KEYCHRON_MAX_QMK=/path/to/keychron-qmk-firmware-2025q3 make keychron-k0-max
 ```
 
-This repo does not flash. Enter bootloader in Cable mode: hold the
-top-row key next to the knob (stock Esc) *or* the reset button under
-the 0 key, then plug in USB-C — see [Keychron's own
-readme](https://github.com/Keychron/qmk_firmware/blob/2025q3/keyboards/keychron/k0_max/readme.md).
-Flash the `.bin` with
-[qmk-browser-flasher](https://github.com/pickypg/qmk-browser-flasher).
+This repo does not flash. Prefer `dfu-util` on this STM32L432 — the
+ROM DFU bootloader stalls WebUSB during erase (the browser flasher
+fails with `DFU_GETSTATUS failed: stall`). Enter bootloader in Cable
+mode: unplug, hold the reset button under the **0** key (not Esc —
+that key is no longer Bootmagic after this keymap), plug in USB-C,
+keep holding 3–5 seconds. `dfu-util -l` should list `0483:df11`
+(STM32 BOOTLOADER), not "Keychron K0 Max". Then:
+
+```
+dfu-util -a 0 -d 0483:df11 -s 0x08000000:leave -t 1024 -D \
+  qmk-userspace/keychron_k0_max_ai_agent_macropad-p1-qmk_<hash>-overlay_<hash>.bin
+```
+
+`-t 1024` works around the L432 bootloader reporting an erase poll
+timeout that is too short. Close the browser flasher tab first or
+`dfu-util` returns `LIBUSB_ERROR_ACCESS`. A hang on "Submitting leave
+request" after `Download done` is normal — the chip has already
+rebooted. See [Keychron's own
+readme](https://github.com/Keychron/qmk_firmware/blob/2025q3/keyboards/keychron/k0_max/readme.md)
+for the hardware reset location.
 
 Then verify the wire protocol directly —
-`python3 hid_bringup_test.py` — and only move on once you've watched
-M1–M5 cycle through every state.
+`python3 hid_bringup_test.py` — and only move on once the four slot
+LEDs (Num Lock `/` `*` `-`, standing in for the shape keys) cycle
+through every state. Watch those keycaps from above, or the LEDs from
+the side; the shape-key legends are not shine-through.
+
+##### Troubleshooting (K0 Max)
+
+- **Factory reset / keys dead after a failed flash.** That reset lives
+  in app firmware. If erase died mid-page, hold the hardware reset
+  under 0 while plugging in (Cable mode, data cable, no hub) and
+  reflash with `dfu-util` as above. Do not click Try again in a stalled
+  browser DFU session.
+- **Rainbow on every key, slots hard to see.** Hold M5 and tap 0 (or
+  click the encoder). That suppresses the animation; it does not
+  disable RGB. Hold M5 and tap Num Lock if you want the rainbow back.
+- **Slot 0 stuck white.** Num Lock is on; that LED is shared with
+  slot 0's color.
+- **New keymap "didn't take".** VIA EEPROM from a previous flash can
+  keep stock Esc/Del/Tab/Bksp on the shape keys. Reset EEPROM in VIA
+  or re-assign those four keys to AI Slot 0–3.
+- **No raw HID / `hid_bringup_test.py` finds nothing.** Cable mode and
+  a USB-C *data* cable. Bluetooth and 2.4 GHz will not carry this
+  protocol.
 
 Slot wiring, VIA reassignment, and the VIA/daemon exclusivity rule are
 all the same as [the Air75 board above](#qmk-keyboard-nuphy-air75-v2).
@@ -698,7 +741,7 @@ pad now works end to end:
 - ✅ Startup seeding of already-running sessions — `claude agents --json` (Claude Code) or `~/.grok/active_sessions.json` (Grok Build); Codex has neither, see [Agents tested](#agents-tested)
 - ✅ Idle-release: the pad connection closes when no session is active, freeing it for VIA
 - ✅ Keychron K0 Max QMK keymap — compiled, flashed, and HID-verified on a live RGB board
-  (`hid_bringup_test.py` cycles M1–M5); see [QMK keyboard (Keychron K0
+  (`hid_bringup_test.py` cycles the top-row shape keys); see [QMK keyboard (Keychron K0
   Max)](#qmk-keyboard-keychron-k0-max)
 - ⚠️ Keychron K1 Pro (ANSI) QMK keymap — written against Keychron's own official firmware
   source, unverified on real hardware (see [QMK keyboard (Keychron K1 Pro,

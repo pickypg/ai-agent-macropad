@@ -98,6 +98,19 @@ void ai_agent_macropad_track_via_remap(uint8_t *data, uint8_t length, uint16_t s
 }
 #endif
 
+void ai_agent_macropad_set_slot_led(uint8_t index, uint8_t led) {
+    if (index < AI_AGENT_MACROPAD_MAX_SLOTS) {
+        slot_led[index] = led;
+    }
+}
+
+uint8_t ai_agent_macropad_get_slot_led(uint8_t index) {
+    if (index >= AI_AGENT_MACROPAD_MAX_SLOTS) {
+        return NO_LED;
+    }
+    return slot_led[index];
+}
+
 bool ai_agent_macropad_process_record(uint16_t keycode, keyrecord_t *record, uint16_t slot_key_base, uint8_t num_slots) {
     if (keycode < slot_key_base || keycode >= (uint16_t)(slot_key_base + num_slots)) {
         return true;

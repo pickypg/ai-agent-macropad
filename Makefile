@@ -11,8 +11,11 @@
 #   KEYCHRON_QMK=/other/keychron-qmk-firmware make keychron-k1-pro
 #   KEYCHRON_MAX_QMK=/other/keychron-qmk-firmware-2025q3 make keychron-k0-max
 #
-# This repo does not flash. Use https://github.com/pickypg/qmk-browser-flasher
-# (or `qmk flash` against the sibling QMK checkout) after compiling.
+# This repo does not flash. On the K0 Max (STM32L432) use dfu-util, not
+# the browser flasher — see README "QMK keyboard (Keychron K0 Max)":
+#   dfu-util -a 0 -d 0483:df11 -s 0x08000000:leave -t 1024 -D qmk-userspace/<bin>
+# Other boards: qmk-browser-flasher or `qmk flash` against the sibling
+# QMK checkout.
 #
 # Do not set TARGET in keymap rules.mk — QMK freezes INTERMEDIATE_OUTPUT
 # from TARGET before those files are included. -e TARGET=... is the
