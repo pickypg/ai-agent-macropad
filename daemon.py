@@ -702,6 +702,8 @@ class Daemon:
         tty = self.session_ttys.get(session_id)
         if tty and self._dispatch_terminal(slot, tty):
             return
+        if tty and self._dispatch_iterm(slot, tty):
+            return
 
         project = self.session_projects.get(session_id)
         if project and self._dispatch_vscode(slot, project):
@@ -845,6 +847,92 @@ class Daemon:
             return False
 
         log.info("activated Terminal tab for tty %r (slot %s)", tty, slot)
+        events_log.info("DISPATCH slot=%s tty=%s result=ok", slot, tty)
+        return True
+
+    def _dispatch_iterm(self, slot, tty):
+        """Try to select+raise the iTerm session whose tty matches
+        exactly. macOS only. Returns True on success, False on any
+        failure (falls through to VS Code/IntelliJ dispatch if
+        available).
+
+        iTerm's AppleScript object model nests tty one level deeper
+        than Terminal.app's: windows -> tabs -> sessions, with tty a
+        property of the session rather than the tab. The app is
+        addressed as "iTerm" (its scripting name) but registers as
+        process "iTerm2" with System Events for the up-front
+        process-existence check.
+
+        Same permission requirement as Terminal dispatch: the terminal
+        running this daemon needs Accessibility/Automation access
+        granted for "System Events" and, separately, "iTerm2".
+        """
+        safe_tty = tty.replace("\\", "\\\\").replace('"', '\\"')
+        script = f'''
+        tell application "System Events"
+            if not (exists process "iTerm2") then
+                return "no_process"
+            end if
+        end tell
+        tell application "iTerm"
+            set foundSession to missing value
+            set foundTab to missing value
+            set foundWindow to missing value
+            repeat with w in windows
+                repeat with t in tabs of w
+                    repeat with s in sessions of t
+                        try
+                            if (tty of s) is "{safe_tty}" then
+                                set foundSession to s
+                                set foundTab to t
+                                set foundWindow to w
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                    if foundSession is not missing value then exit repeat
+                end repeat
+                if foundSession is not missing value then exit repeat
+            end repeat
+            if foundSession is missing value then
+                return "no_match"
+            end if
+            select foundSession
+            tell foundTab to select
+            tell foundWindow to select
+            activate
+            return "ok"
+        end tell
+        '''
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                timeout=3,
+                text=True,
+            )
+        except FileNotFoundError:
+            log.warning("osascript not found — iTerm dispatch requires macOS")
+            events_log.info(
+                "DISPATCH slot=%s tty=%s result=osascript_not_found", slot, tty
+            )
+            return False
+        except subprocess.TimeoutExpired:
+            log.warning("osascript timed out activating iTerm session for %s", tty)
+            events_log.info("DISPATCH slot=%s tty=%s result=timeout", slot, tty)
+            return False
+
+        output = result.stdout.strip()
+        if result.returncode != 0 or output != "ok":
+            reason = output or result.stderr.strip() or "unknown_error"
+            log.warning("iTerm session activation failed for tty %r: %s", tty, reason)
+            events_log.info(
+                "DISPATCH slot=%s tty=%s result=iterm_error reason=%r",
+                slot, tty, reason,
+            )
+            return False
+
+        log.info("activated iTerm session for tty %r (slot %s)", tty, slot)
         events_log.info("DISPATCH slot=%s tty=%s result=ok", slot, tty)
         return True
 
