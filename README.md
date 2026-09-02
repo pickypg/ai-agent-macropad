@@ -586,9 +586,11 @@ slot is just `MSG_SLOT` with state `off` (fully dark — distinct from
 A tap is sent as `MSG_KEY` on key-down only (no key-up equivalent) and,
 on the daemon side, logs which session it corresponds to and attempts
 to bring that session's window to the front (tried in order: tmux
-pane, Terminal.app tab by tty, iTerm session by tty, VS Code window by
-project name, IntelliJ IDEA window by project name) — all via
-AppleScript, so this is macOS-only for now.
+pane, Terminal.app tab by tty, iTerm session by tty, a generic
+GUI-app-by-pid fallback for any other terminal emulator with a real
+controlling tty — see `_dispatch_generic_gui` in `daemon.py` — then VS
+Code window by project name, IntelliJ IDEA window by project name) —
+all via AppleScript, so this is macOS-only for now.
 
 Holding a slot key for 5s (`AI_AGENT_MACROPAD_HOLD_THRESHOLD_MS` in
 `ai_agent_macropad.h`) fires `MSG_KEY_HELD` — polled continuously from

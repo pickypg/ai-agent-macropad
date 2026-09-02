@@ -461,6 +461,75 @@ def _tmux_pane_for_tty(tty):
     return None
 
 
+def _pid_on_tty(tty):
+    """Returns the pid of some process attached to the given
+    controlling tty (the login shell, ordinarily), or None if nothing
+    is. Starting point for _gui_app_ancestor_pid() below.
+    """
+    short = tty.removeprefix("/dev/")
+    try:
+        result = subprocess.run(
+            ["ps", "-t", short, "-o", "pid="],
+            capture_output=True, timeout=2, text=True,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    for line in result.stdout.split():
+        if line.isdigit():
+            return int(line)
+    return None
+
+
+def _gui_app_ancestor_pid(pid, max_depth=25):
+    """Walks a process's ppid chain looking for the nearest ancestor
+    that's an installed, bundled macOS app — its `comm` path contains
+    both ".app/Contents/MacOS/" and "/Applications/" (covers both
+    /Applications and ~/Applications). Returns that ancestor's pid, or
+    None if none is found before the chain bottoms out at launchd
+    (pid 1), loops past max_depth, or a `ps` call fails.
+
+    The "/Applications/" requirement guards against a false match hit
+    during testing: matching on ".app/Contents/MacOS/" alone also
+    catches non-GUI tools that happen to ship inside an app bundle
+    without being an "Applications" app at all — e.g. Homebrew's
+    python3 launcher, which resolves via a Python.framework's
+    Python.app under Cellar.
+
+    Deliberately stops at the *nearest* match rather than climbing all
+    the way to launchd: also hit during testing, a terminal emulator
+    launched by typing its name/`open` in an *existing* terminal
+    window is a child of that other terminal's process, so climbing
+    further would walk straight past the correct (nearest) app and
+    land on the outer one instead — e.g. Kitty launched from a
+    Terminal.app tab resolving to Terminal.app rather than Kitty.
+
+    This is what makes _dispatch_generic_gui() below work for *any*
+    terminal emulator without app-specific code: rather than a bespoke
+    AppleScript per app (its own scripting dictionary, or none at
+    all), the owning GUI app is found the same way regardless of which
+    one it is, then raised via System Events by pid.
+    """
+    for _ in range(max_depth):
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "ppid=,comm=", "-p", str(pid)],
+                capture_output=True, timeout=2, text=True,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return None
+        line = result.stdout.strip()
+        if not line:
+            return None
+        ppid_str, _, comm = line.partition(" ")
+        comm = comm.strip()
+        if ".app/Contents/MacOS/" in comm and "/Applications/" in comm:
+            return pid
+        if not ppid_str.isdigit() or int(ppid_str) <= 1:
+            return None
+        pid = int(ppid_str)
+    return None
+
+
 # --- Daemon: socket server + hook->state logic -------------------------
 
 # Notification:permission_prompt is known to be unreliable — it can
@@ -541,6 +610,18 @@ class Daemon:
         # this field, and for seed_existing_sessions() below, which is
         # inherently Claude-Code-only (see discover_running_sessions()).
         self.session_agents = {}
+        # session_id -> name of whichever _dispatch_* method last
+        # successfully raised this session's window (see
+        # dispatch_bring_to_front). Tried first on the next keypress,
+        # ahead of the rest of the fallback chain — avoids re-probing
+        # methods already known not to apply to this session (e.g. two
+        # failed osascript round-trips before reaching the one that
+        # actually works), which was adding ~750ms of perceptible
+        # latency per press for non-Terminal/iTerm sessions. Only ever
+        # a speed hint: a cache miss or a cached method that no longer
+        # works still falls through to the full chain in the same
+        # call, so nothing degrades on failure — it just re-learns.
+        self.session_dispatch_method = {}
 
     def _send_pad(self, msg):
         """write_json(), plus remembering it in self.pad_state so
@@ -689,6 +770,7 @@ class Daemon:
             self.session_ttys.pop(session_id, None)
             self.session_projects.pop(session_id, None)
             self.session_agents.pop(session_id, None)
+            self.session_dispatch_method.pop(session_id, None)
         self._send_pad({"t": "clear", "i": i})
         events_log.info(
             "MAPPED slot=%s cleared (ManualEvict session=%s)", i, session_id
@@ -696,20 +778,34 @@ class Daemon:
 
     def dispatch_bring_to_front(self, slot, session_id):
         pane = self.session_panes.get(session_id)
-        if pane and self._dispatch_tmux(slot, pane):
-            return
-
         tty = self.session_ttys.get(session_id)
-        if tty and self._dispatch_terminal(slot, tty):
-            return
-        if tty and self._dispatch_iterm(slot, tty):
-            return
-
         project = self.session_projects.get(session_id)
-        if project and self._dispatch_vscode(slot, project):
-            return
-        if project and self._dispatch_intellij(slot, project):
-            return
+
+        # (name, arg, method) in the fallback order tried on a cache
+        # miss — arg is whichever of pane/tty/project that method
+        # needs, and a method is skipped outright if its arg is falsy.
+        candidates = [
+            ("tmux", pane, self._dispatch_tmux),
+            ("terminal", tty, self._dispatch_terminal),
+            ("iterm", tty, self._dispatch_iterm),
+            ("generic_gui", tty, self._dispatch_generic_gui),
+            ("vscode", project, self._dispatch_vscode),
+            ("intellij", project, self._dispatch_intellij),
+        ]
+
+        # Whichever method last worked for this session is tried
+        # first, ahead of the fallback order above — see
+        # session_dispatch_method's own comment for why. A stable sort
+        # moves it to the front without disturbing the fallback order
+        # among the rest.
+        cached = self.session_dispatch_method.get(session_id)
+        if cached:
+            candidates.sort(key=lambda c: c[0] != cached)
+
+        for name, arg, method in candidates:
+            if arg and method(slot, arg):
+                self.session_dispatch_method[session_id] = name
+                return
 
         if not pane and not tty and not project:
             log.warning(
@@ -936,6 +1032,86 @@ class Daemon:
         events_log.info("DISPATCH slot=%s tty=%s result=ok", slot, tty)
         return True
 
+    def _dispatch_generic_gui(self, slot, tty):
+        """Fallback for any terminal emulator without a bespoke method
+        above (Alacritty, Kitty, WezTerm, Hyper, Ghostty, ...): finds
+        the GUI app that owns this tty via process-tree ancestry
+        (_pid_on_tty + _gui_app_ancestor_pid) and raises it by pid
+        through System Events, instead of needing a new per-app
+        AppleScript method — the whole point of this method existing.
+
+        Coarser than the tmux/Terminal.app/iTerm dispatches above: it
+        raises the app's frontmost window, not necessarily the
+        specific tab/window hosting this tty. Most of these apps are
+        single-process, multi-window, and there's no app-agnostic way
+        to ask System Events "which of your windows has this tty" —
+        only apps with their own scripting dictionary (like Terminal
+        and iTerm) expose that. Still strictly better than no dispatch
+        at all, which is the alternative for anything not on the
+        bespoke list above.
+        """
+        owner_pid = _pid_on_tty(tty)
+        if owner_pid is None:
+            log.warning("no process found attached to tty %s", tty)
+            events_log.info("DISPATCH slot=%s tty=%s result=no_tty_owner", slot, tty)
+            return False
+
+        app_pid = _gui_app_ancestor_pid(owner_pid)
+        if app_pid is None:
+            log.warning("no GUI app ancestor found for tty %s (pid %s)", tty, owner_pid)
+            events_log.info("DISPATCH slot=%s tty=%s result=no_app_ancestor", slot, tty)
+            return False
+
+        script = f'''
+        tell application "System Events"
+            set matches to (processes whose unix id is {app_pid})
+            if (count of matches) is 0 then return "no_process"
+            tell item 1 of matches
+                set frontmost to true
+                try
+                    perform action "AXRaise" of window 1
+                end try
+            end tell
+        end tell
+        return "ok"
+        '''
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                timeout=3,
+                text=True,
+            )
+        except FileNotFoundError:
+            log.warning("osascript not found — generic dispatch requires macOS")
+            events_log.info(
+                "DISPATCH slot=%s tty=%s result=osascript_not_found", slot, tty
+            )
+            return False
+        except subprocess.TimeoutExpired:
+            log.warning(
+                "osascript timed out activating app pid %s for tty %s", app_pid, tty
+            )
+            events_log.info("DISPATCH slot=%s tty=%s result=timeout", slot, tty)
+            return False
+
+        output = result.stdout.strip()
+        if result.returncode != 0 or output != "ok":
+            reason = output or result.stderr.strip() or "unknown_error"
+            log.warning(
+                "generic app activation failed for tty %r (pid %s): %s",
+                tty, app_pid, reason,
+            )
+            events_log.info(
+                "DISPATCH slot=%s tty=%s result=generic_error reason=%r",
+                slot, tty, reason,
+            )
+            return False
+
+        log.info("activated app pid %s for tty %r (slot %s)", app_pid, tty, slot)
+        events_log.info("DISPATCH slot=%s tty=%s result=ok", slot, tty)
+        return True
+
     def _dispatch_vscode(self, slot, project):
         """Try to raise a VS Code window whose title contains the
         project folder name, via AppleScript/System Events. macOS
@@ -1158,6 +1334,7 @@ class Daemon:
             self.session_ttys.pop(session_id, None)
             self.session_projects.pop(session_id, None)
             self.session_agents.pop(session_id, None)
+            self.session_dispatch_method.pop(session_id, None)
             if i is not None:
                 self._send_pad({"t": "clear", "i": i})
                 events_log.info("MAPPED slot=%s cleared (SessionEnd)", i)
