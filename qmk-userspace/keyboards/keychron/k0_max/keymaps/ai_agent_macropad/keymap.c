@@ -14,10 +14,7 @@
 //     (Num Lock / * -, LED indices 5–8 in led_config.c) where they
 //     catch the keycaps. The shape keys still send the slot presses.
 //   - M1..M4 stay stock macros; M5 stays MO(FN) for Bluetooth pairing
-//     and lighting. Hold M5 and tap 0 (or click the encoder) to suppress
-//     the numpad rainbow so only slot colors remain — QMK's stock
-//     UG_TOGG would disable the RGB engine entirely and take the slot
-//     LEDs with it.
+//     and lighting (stock UG_TOGG / UG_NEXT / etc.).
 // Encoder click is mute; encoder rotate is volume.
 //
 // 2025q3 already defines a strong via_command_kb() in
@@ -105,25 +102,9 @@ void keyboard_post_init_user(void) {
     ai_agent_macropad_init(NUM_MACROPAD_SLOTS, NULL);
     ai_agent_macropad_scan_slots(AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
     k0_max_paint_shape_slots_on_row_below();
-    // Slot indicators only run while the RGB engine is enabled. Hide
-    // the stock animation (EEPROM often boots into Mix RGB / rainbow)
-    // without calling rgb_matrix_disable() — that would skip
-    // rgb_matrix_indicators_user() too.
-    rgb_matrix_enable_noeeprom();
-    rgb_matrix_set_flags_noeeprom(LED_FLAG_NONE);
-    rgb_matrix_set_color_all(0, 0, 0);
 }
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-    if (keycode == UG_TOGG && record->event.pressed) {
-        if (rgb_matrix_get_flags() == LED_FLAG_NONE) {
-            rgb_matrix_set_flags_noeeprom(LED_FLAG_ALL);
-        } else {
-            rgb_matrix_set_flags_noeeprom(LED_FLAG_NONE);
-            rgb_matrix_set_color_all(0, 0, 0);
-        }
-        return false;
-    }
     return ai_agent_macropad_process_record(keycode, record, AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
 }
 

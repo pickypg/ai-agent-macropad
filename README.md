@@ -262,11 +262,9 @@ wired by default on the top-row shape keys (stock Esc / Del / Tab /
 Bksp — circle / triangle / square / X in the printed manual). Each
 shows one AI agent session's state via per-key RGB; pressing one
 brings that session's window to the front. **M5 stays `MO(FN)`**, same
-as stock, so Bluetooth pairing and lighting still work. Hold M5 and
-tap 0 (or click the encoder) to suppress the numpad rainbow — slot
-colors stay on; stock `UG_TOGG` would disable the RGB engine and take
-the slots with it. Hold M5 and tap Num Lock to cycle effects (and
-bring the rainbow back). M1–M4 stay stock macros; encoder rotate is
+as stock, so Bluetooth pairing and lighting still work (M5+0 toggles
+RGB, M5+Num Lock cycles effects). Slot colors overlay whatever
+animation is running. M1–M4 stay stock macros; encoder rotate is
 volume; encoder click is mute. AI_AGENT_KEY_4..11 exist as valid
 keycodes and can be dragged onto spare keys in VIA. Stock legends are
 not shine-through, and the top-row LEDs face up with nothing above
@@ -334,9 +332,11 @@ the side; the shape-key legends are not shine-through.
   under 0 while plugging in (Cable mode, data cable, no hub) and
   reflash with `dfu-util` as above. Do not click Try again in a stalled
   browser DFU session.
-- **Rainbow on every key, slots hard to see.** Hold M5 and tap 0 (or
-  click the encoder). That suppresses the animation; it does not
-  disable RGB. Hold M5 and tap Num Lock if you want the rainbow back.
+- **Rainbow drowning out slot colors.** Lighting is stock Keychron FN:
+  M5+0 toggles RGB (this also hides slot paints — the engine is off),
+  M5+Num Lock cycles effects, and the rest of the FN layer adjusts
+  brightness / hue / sat / speed. Turn brightness down or pick a
+  quieter effect if slots are hard to see.
 - **Slot 0 stuck white.** Num Lock is on; that LED is shared with
   slot 0's color.
 - **New keymap "didn't take".** VIA EEPROM from a previous flash can
