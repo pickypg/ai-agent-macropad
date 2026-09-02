@@ -461,6 +461,75 @@ def _tmux_pane_for_tty(tty):
     return None
 
 
+def _pid_on_tty(tty):
+    """Returns the pid of some process attached to the given
+    controlling tty (the login shell, ordinarily), or None if nothing
+    is. Starting point for _gui_app_ancestor_pid() below.
+    """
+    short = tty.removeprefix("/dev/")
+    try:
+        result = subprocess.run(
+            ["ps", "-t", short, "-o", "pid="],
+            capture_output=True, timeout=2, text=True,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    for line in result.stdout.split():
+        if line.isdigit():
+            return int(line)
+    return None
+
+
+def _gui_app_ancestor_pid(pid, max_depth=25):
+    """Walks a process's ppid chain looking for the nearest ancestor
+    that's an installed, bundled macOS app — its `comm` path contains
+    both ".app/Contents/MacOS/" and "/Applications/" (covers both
+    /Applications and ~/Applications). Returns that ancestor's pid, or
+    None if none is found before the chain bottoms out at launchd
+    (pid 1), loops past max_depth, or a `ps` call fails.
+
+    The "/Applications/" requirement guards against a false match hit
+    during testing: matching on ".app/Contents/MacOS/" alone also
+    catches non-GUI tools that happen to ship inside an app bundle
+    without being an "Applications" app at all — e.g. Homebrew's
+    python3 launcher, which resolves via a Python.framework's
+    Python.app under Cellar.
+
+    Deliberately stops at the *nearest* match rather than climbing all
+    the way to launchd: also hit during testing, a terminal emulator
+    launched by typing its name/`open` in an *existing* terminal
+    window is a child of that other terminal's process, so climbing
+    further would walk straight past the correct (nearest) app and
+    land on the outer one instead — e.g. Kitty launched from a
+    Terminal.app tab resolving to Terminal.app rather than Kitty.
+
+    This is what makes _dispatch_generic_gui() below work for *any*
+    terminal emulator without app-specific code: rather than a bespoke
+    AppleScript per app (its own scripting dictionary, or none at
+    all), the owning GUI app is found the same way regardless of which
+    one it is, then raised via System Events by pid.
+    """
+    for _ in range(max_depth):
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "ppid=,comm=", "-p", str(pid)],
+                capture_output=True, timeout=2, text=True,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return None
+        line = result.stdout.strip()
+        if not line:
+            return None
+        ppid_str, _, comm = line.partition(" ")
+        comm = comm.strip()
+        if ".app/Contents/MacOS/" in comm and "/Applications/" in comm:
+            return pid
+        if not ppid_str.isdigit() or int(ppid_str) <= 1:
+            return None
+        pid = int(ppid_str)
+    return None
+
+
 # --- Daemon: socket server + hook->state logic -------------------------
 
 # Notification:permission_prompt is known to be unreliable — it can
@@ -541,6 +610,18 @@ class Daemon:
         # this field, and for seed_existing_sessions() below, which is
         # inherently Claude-Code-only (see discover_running_sessions()).
         self.session_agents = {}
+        # session_id -> name of whichever _dispatch_* method last
+        # successfully raised this session's window (see
+        # dispatch_bring_to_front). Tried first on the next keypress,
+        # ahead of the rest of the fallback chain — avoids re-probing
+        # methods already known not to apply to this session (e.g. two
+        # failed osascript round-trips before reaching the one that
+        # actually works), which was adding ~750ms of perceptible
+        # latency per press for non-Terminal/iTerm sessions. Only ever
+        # a speed hint: a cache miss or a cached method that no longer
+        # works still falls through to the full chain in the same
+        # call, so nothing degrades on failure — it just re-learns.
+        self.session_dispatch_method = {}
 
     def _send_pad(self, msg):
         """write_json(), plus remembering it in self.pad_state so
@@ -689,27 +770,51 @@ class Daemon:
             self.session_ttys.pop(session_id, None)
             self.session_projects.pop(session_id, None)
             self.session_agents.pop(session_id, None)
+            self.session_dispatch_method.pop(session_id, None)
         self._send_pad({"t": "clear", "i": i})
         events_log.info(
             "MAPPED slot=%s cleared (ManualEvict session=%s)", i, session_id
         )
 
-    def dispatch_bring_to_front(self, slot, session_id):
+    def _dispatch_candidates(self, session_id):
+        """(name, arg, method) for every dispatch method, in fallback
+        order — arg is whichever of pane/tty/project that method
+        needs, and a method is skipped outright by both callers below
+        if its arg is falsy. Shared by dispatch_bring_to_front() (the
+        real thing, on a keypress) and warm_dispatch_cache() (a
+        probe_only=True dry run, to learn the answer ahead of time —
+        see its docstring).
+        """
         pane = self.session_panes.get(session_id)
-        if pane and self._dispatch_tmux(slot, pane):
-            return
-
         tty = self.session_ttys.get(session_id)
-        if tty and self._dispatch_terminal(slot, tty):
-            return
-
         project = self.session_projects.get(session_id)
-        if project and self._dispatch_vscode(slot, project):
-            return
-        if project and self._dispatch_intellij(slot, project):
-            return
+        return [
+            ("tmux", pane, self._dispatch_tmux),
+            ("terminal", tty, self._dispatch_terminal),
+            ("iterm", tty, self._dispatch_iterm),
+            ("generic_gui", tty, self._dispatch_generic_gui),
+            ("vscode", project, self._dispatch_vscode),
+            ("intellij", project, self._dispatch_intellij),
+        ]
 
-        if not pane and not tty and not project:
+    def dispatch_bring_to_front(self, slot, session_id):
+        candidates = self._dispatch_candidates(session_id)
+
+        # Whichever method last worked for this session (including a
+        # warm_dispatch_cache() probe — see its docstring) is tried
+        # first, ahead of the fallback order above. A stable sort
+        # moves it to the front without disturbing the fallback order
+        # among the rest.
+        cached = self.session_dispatch_method.get(session_id)
+        if cached:
+            candidates.sort(key=lambda c: c[0] != cached)
+
+        for name, arg, method in candidates:
+            if arg and method(slot, arg):
+                self.session_dispatch_method[session_id] = name
+                return
+
+        if not any(arg for _, arg, _ in candidates):
             log.warning(
                 "no tmux pane, tty, or project name known for slot %s (session=%s)",
                 slot, session_id,
@@ -720,28 +825,92 @@ class Daemon:
         # else: whichever dispatch(es) were attempted already logged
         # their own specific failure reason.
 
-    def _dispatch_tmux(self, slot, pane):
+    def _spawn_dispatch_cache_warmup(self, slot, session_id):
+        """Kicks off warm_dispatch_cache() (see its docstring) on a
+        background thread, so its blocking probe calls never stall the
+        asyncio event loop this is called from. Called right after a
+        session's tty/pane/project first become known: SessionStart,
+        its lazy-backfill fallback, and seed_existing_sessions() below.
+        """
+        threading.Thread(
+            target=self.warm_dispatch_cache, args=(slot, session_id), daemon=True
+        ).start()
+
+    def warm_dispatch_cache(self, slot, session_id):
+        """Probes the same fallback chain as dispatch_bring_to_front()
+        — in a probe_only=True dry run that finds a match without
+        raising/selecting anything — and caches the first method that
+        matches, so the first real keypress for this session hits the
+        session_dispatch_method cache instead of re-probing the whole
+        chain live.
+
+        Meant to be run off the hot path, in a background thread
+        kicked off right after a session's tty/pane/project become
+        known (SessionStart, its lazy-backfill fallback, and
+        seed_existing_sessions() below) — never called inline from
+        those, since the probes are blocking subprocess/osascript
+        calls (~250-750ms total for a cold, uncached session, per
+        dispatch_bring_to_front's own docstring) and those call sites
+        run on the asyncio event loop, where that would stall
+        concurrent hook processing for every other session.
+
+        Best-effort: if every method probe-fails (nothing to raise
+        yet, e.g. the terminal window hasn't finished appearing right
+        at session start), simply leaves the cache unset — the first
+        real keypress falls through to the full chain exactly as
+        before, so this is a pure latency optimization, never a
+        correctness dependency.
+        """
+        for name, arg, method in self._dispatch_candidates(session_id):
+            if arg and method(slot, arg, probe_only=True):
+                self.session_dispatch_method[session_id] = name
+                return
+
+    def _dispatch_tmux(self, slot, pane, probe_only=False):
         """Try tmux select-window. Returns True on success, False on
         any failure (falls through to VS Code dispatch if available).
         Runs on the pad transport's background reader thread (not the
         asyncio event loop), so a blocking subprocess call here is
         fine — it only stalls pad reads briefly, not hook processing.
+
+        probe_only=True checks whether the pane still exists (via
+        list-panes) instead of actually switching to it — used by
+        warm_dispatch_cache() to learn which method will work for a
+        session ahead of the first real keypress, without visibly
+        changing anything in the meantime. Runs on whatever thread
+        calls it, same caveat as above.
         """
         try:
-            result = subprocess.run(
-                ["tmux", "select-window", "-t", pane],
-                capture_output=True,
-                timeout=2,
-                text=True,
-            )
+            if probe_only:
+                result = subprocess.run(
+                    ["tmux", "list-panes", "-a", "-F", "#{pane_id}"],
+                    capture_output=True,
+                    timeout=2,
+                    text=True,
+                )
+            else:
+                result = subprocess.run(
+                    ["tmux", "select-window", "-t", pane],
+                    capture_output=True,
+                    timeout=2,
+                    text=True,
+                )
         except FileNotFoundError:
             log.warning("tmux not found on PATH — can't dispatch keypress")
             events_log.info("DISPATCH slot=%s pane=%s result=tmux_not_found", slot, pane)
             return False
         except subprocess.TimeoutExpired:
-            log.warning("tmux select-window timed out for pane %s", pane)
+            log.warning("tmux command timed out for pane %s", pane)
             events_log.info("DISPATCH slot=%s pane=%s result=timeout", slot, pane)
             return False
+
+        if probe_only:
+            found = pane in result.stdout.split()
+            events_log.info(
+                "DISPATCH slot=%s pane=%s result=%s",
+                slot, pane, "probe_ok" if found else "probe_no_match",
+            )
+            return found
 
         if result.returncode != 0:
             # Most common cause: the pane no longer exists (session
@@ -761,7 +930,7 @@ class Daemon:
         events_log.info("DISPATCH slot=%s pane=%s result=ok", slot, pane)
         return True
 
-    def _dispatch_terminal(self, slot, tty):
+    def _dispatch_terminal(self, slot, tty, probe_only=False):
         """Try to select+raise the Terminal.app tab whose tty matches
         exactly. macOS only. Returns True on success, False on any
         failure (falls through to VS Code dispatch if available).
@@ -784,8 +953,19 @@ class Daemon:
         running this daemon needs Accessibility/Automation access
         granted for "System Events" and, separately, "Terminal" — a
         second permission prompt distinct from the first.
+
+        probe_only=True runs the exact same tab search but skips the
+        select/raise lines at the end, so it reports a match without
+        visibly changing anything — used by warm_dispatch_cache() (see
+        its docstring) to learn which method works ahead of the first
+        real keypress.
         """
         safe_tty = tty.replace("\\", "\\\\").replace('"', '\\"')
+        activate_block = "" if probe_only else '''
+            set selected tab of foundWindow to foundTab
+            set frontmost of foundWindow to true
+            activate
+        '''
         script = f'''
         tell application "System Events"
             if not (exists process "Terminal") then
@@ -810,9 +990,7 @@ class Daemon:
             if foundTab is missing value then
                 return "no_match"
             end if
-            set selected tab of foundWindow to foundTab
-            set frontmost of foundWindow to true
-            activate
+            {activate_block}
             return "ok"
         end tell
         '''
@@ -844,11 +1022,206 @@ class Daemon:
             )
             return False
 
+        if probe_only:
+            events_log.info("DISPATCH slot=%s tty=%s result=probe_ok", slot, tty)
+            return True
+
         log.info("activated Terminal tab for tty %r (slot %s)", tty, slot)
         events_log.info("DISPATCH slot=%s tty=%s result=ok", slot, tty)
         return True
 
-    def _dispatch_vscode(self, slot, project):
+    def _dispatch_iterm(self, slot, tty, probe_only=False):
+        """Try to select+raise the iTerm session whose tty matches
+        exactly. macOS only. Returns True on success, False on any
+        failure (falls through to VS Code/IntelliJ dispatch if
+        available).
+
+        iTerm's AppleScript object model nests tty one level deeper
+        than Terminal.app's: windows -> tabs -> sessions, with tty a
+        property of the session rather than the tab. The app is
+        addressed as "iTerm" (its scripting name) but registers as
+        process "iTerm2" with System Events for the up-front
+        process-existence check.
+
+        Same permission requirement as Terminal dispatch: the terminal
+        running this daemon needs Accessibility/Automation access
+        granted for "System Events" and, separately, "iTerm2".
+
+        probe_only=True runs the exact same session search but skips
+        the select/raise lines at the end — see _dispatch_terminal's
+        docstring for why (same rationale, same warm_dispatch_cache()
+        caller).
+        """
+        safe_tty = tty.replace("\\", "\\\\").replace('"', '\\"')
+        activate_block = "" if probe_only else '''
+            select foundSession
+            tell foundTab to select
+            tell foundWindow to select
+            activate
+        '''
+        script = f'''
+        tell application "System Events"
+            if not (exists process "iTerm2") then
+                return "no_process"
+            end if
+        end tell
+        tell application "iTerm"
+            set foundSession to missing value
+            set foundTab to missing value
+            set foundWindow to missing value
+            repeat with w in windows
+                repeat with t in tabs of w
+                    repeat with s in sessions of t
+                        try
+                            if (tty of s) is "{safe_tty}" then
+                                set foundSession to s
+                                set foundTab to t
+                                set foundWindow to w
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                    if foundSession is not missing value then exit repeat
+                end repeat
+                if foundSession is not missing value then exit repeat
+            end repeat
+            if foundSession is missing value then
+                return "no_match"
+            end if
+            {activate_block}
+            return "ok"
+        end tell
+        '''
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                timeout=3,
+                text=True,
+            )
+        except FileNotFoundError:
+            log.warning("osascript not found — iTerm dispatch requires macOS")
+            events_log.info(
+                "DISPATCH slot=%s tty=%s result=osascript_not_found", slot, tty
+            )
+            return False
+        except subprocess.TimeoutExpired:
+            log.warning("osascript timed out activating iTerm session for %s", tty)
+            events_log.info("DISPATCH slot=%s tty=%s result=timeout", slot, tty)
+            return False
+
+        output = result.stdout.strip()
+        if result.returncode != 0 or output != "ok":
+            reason = output or result.stderr.strip() or "unknown_error"
+            log.warning("iTerm session activation failed for tty %r: %s", tty, reason)
+            events_log.info(
+                "DISPATCH slot=%s tty=%s result=iterm_error reason=%r",
+                slot, tty, reason,
+            )
+            return False
+
+        if probe_only:
+            events_log.info("DISPATCH slot=%s tty=%s result=probe_ok", slot, tty)
+            return True
+
+        log.info("activated iTerm session for tty %r (slot %s)", tty, slot)
+        events_log.info("DISPATCH slot=%s tty=%s result=ok", slot, tty)
+        return True
+
+    def _dispatch_generic_gui(self, slot, tty, probe_only=False):
+        """Fallback for any terminal emulator without a bespoke method
+        above (Alacritty, Kitty, WezTerm, Hyper, Ghostty, ...): finds
+        the GUI app that owns this tty via process-tree ancestry
+        (_pid_on_tty + _gui_app_ancestor_pid) and raises it by pid
+        through System Events, instead of needing a new per-app
+        AppleScript method — the whole point of this method existing.
+
+        Coarser than the tmux/Terminal.app/iTerm dispatches above: it
+        raises the app's frontmost window, not necessarily the
+        specific tab/window hosting this tty. Most of these apps are
+        single-process, multi-window, and there's no app-agnostic way
+        to ask System Events "which of your windows has this tty" —
+        only apps with their own scripting dictionary (like Terminal
+        and iTerm) expose that. Still strictly better than no dispatch
+        at all, which is the alternative for anything not on the
+        bespoke list above.
+
+        probe_only=True still does the (side-effect-free) pid
+        resolution and confirms System Events can see that pid, but
+        skips the frontmost/AXRaise lines — see _dispatch_terminal's
+        docstring for why (same rationale, same warm_dispatch_cache()
+        caller).
+        """
+        owner_pid = _pid_on_tty(tty)
+        if owner_pid is None:
+            log.warning("no process found attached to tty %s", tty)
+            events_log.info("DISPATCH slot=%s tty=%s result=no_tty_owner", slot, tty)
+            return False
+
+        app_pid = _gui_app_ancestor_pid(owner_pid)
+        if app_pid is None:
+            log.warning("no GUI app ancestor found for tty %s (pid %s)", tty, owner_pid)
+            events_log.info("DISPATCH slot=%s tty=%s result=no_app_ancestor", slot, tty)
+            return False
+
+        activate_block = "" if probe_only else '''
+            tell item 1 of matches
+                set frontmost to true
+                try
+                    perform action "AXRaise" of window 1
+                end try
+            end tell
+        '''
+        script = f'''
+        tell application "System Events"
+            set matches to (processes whose unix id is {app_pid})
+            if (count of matches) is 0 then return "no_process"
+            {activate_block}
+        end tell
+        return "ok"
+        '''
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                timeout=3,
+                text=True,
+            )
+        except FileNotFoundError:
+            log.warning("osascript not found — generic dispatch requires macOS")
+            events_log.info(
+                "DISPATCH slot=%s tty=%s result=osascript_not_found", slot, tty
+            )
+            return False
+        except subprocess.TimeoutExpired:
+            log.warning(
+                "osascript timed out activating app pid %s for tty %s", app_pid, tty
+            )
+            events_log.info("DISPATCH slot=%s tty=%s result=timeout", slot, tty)
+            return False
+
+        output = result.stdout.strip()
+        if result.returncode != 0 or output != "ok":
+            reason = output or result.stderr.strip() or "unknown_error"
+            log.warning(
+                "generic app activation failed for tty %r (pid %s): %s",
+                tty, app_pid, reason,
+            )
+            events_log.info(
+                "DISPATCH slot=%s tty=%s result=generic_error reason=%r",
+                slot, tty, reason,
+            )
+            return False
+
+        if probe_only:
+            events_log.info("DISPATCH slot=%s tty=%s result=probe_ok", slot, tty)
+            return True
+
+        log.info("activated app pid %s for tty %r (slot %s)", app_pid, tty, slot)
+        events_log.info("DISPATCH slot=%s tty=%s result=ok", slot, tty)
+        return True
+
+    def _dispatch_vscode(self, slot, project, probe_only=False):
         """Try to raise a VS Code window whose title contains the
         project folder name, via AppleScript/System Events. macOS
         only. Returns True on success, False on any failure.
@@ -870,11 +1243,18 @@ class Daemon:
           - Depends on VS Code's default window-title format (folder
             name visible in the title). A customized "window.title"
             setting in VS Code can break the match.
+
+        probe_only=True runs the exact same window search but skips
+        the AXRaise/activate lines — see _dispatch_terminal's
+        docstring for why (same rationale, same warm_dispatch_cache()
+        caller).
         """
         # Defensive escaping — project names come from folder names,
         # but a stray embedded double-quote would otherwise break out
         # of the AppleScript string literal.
         safe_project = project.replace("\\", "\\\\").replace('"', '\\"')
+        raise_line = "" if probe_only else 'perform action "AXRaise" of item 1 of matchingWindows'
+        activate_line = "" if probe_only else 'tell application "Visual Studio Code" to activate'
         script = f'''
         tell application "System Events"
             if not (exists process "Code") then
@@ -885,10 +1265,10 @@ class Daemon:
                 if (count of matchingWindows) is 0 then
                     return "no_window"
                 end if
-                perform action "AXRaise" of item 1 of matchingWindows
+                {raise_line}
             end tell
         end tell
-        tell application "Visual Studio Code" to activate
+        {activate_line}
         return "ok"
         '''
         try:
@@ -925,11 +1305,15 @@ class Daemon:
             )
             return False
 
+        if probe_only:
+            events_log.info("DISPATCH slot=%s project=%s result=probe_ok", slot, project)
+            return True
+
         log.info("activated VS Code window for project %r (slot %s)", project, slot)
         events_log.info("DISPATCH slot=%s project=%s result=ok", slot, project)
         return True
 
-    def _dispatch_intellij(self, slot, project):
+    def _dispatch_intellij(self, slot, project, probe_only=False):
         """Try to raise an IntelliJ IDEA window whose title contains
         the project folder name, via AppleScript/System Events. macOS
         only. Returns True on success, False on any failure.
@@ -946,8 +1330,15 @@ class Daemon:
             WebStorm, ...) can report a different process name and
             won't match — adjust the process/application names below
             if that's your setup.
+
+        probe_only=True runs the exact same window search but skips
+        the AXRaise/activate lines — see _dispatch_terminal's
+        docstring for why (same rationale, same warm_dispatch_cache()
+        caller).
         """
         safe_project = project.replace("\\", "\\\\").replace('"', '\\"')
+        raise_line = "" if probe_only else 'perform action "AXRaise" of item 1 of matchingWindows'
+        activate_line = "" if probe_only else 'tell application "IntelliJ IDEA" to activate'
         script = f'''
         tell application "System Events"
             if not (exists process "idea") then
@@ -958,10 +1349,10 @@ class Daemon:
                 if (count of matchingWindows) is 0 then
                     return "no_window"
                 end if
-                perform action "AXRaise" of item 1 of matchingWindows
+                {raise_line}
             end tell
         end tell
-        tell application "IntelliJ IDEA" to activate
+        {activate_line}
         return "ok"
         '''
         try:
@@ -993,6 +1384,10 @@ class Daemon:
                 slot, project, reason,
             )
             return False
+
+        if probe_only:
+            events_log.info("DISPATCH slot=%s project=%s result=probe_ok", slot, project)
+            return True
 
         log.info("activated IntelliJ window for project %r (slot %s)", project, slot)
         events_log.info("DISPATCH slot=%s project=%s result=ok", slot, project)
@@ -1060,6 +1455,7 @@ class Daemon:
                     "MAPPED slot=%s state=idle agent=%s pane=%s tty=%s project=%s (SessionStart)",
                     i, agent, pane or "<none>", tty or "<none>", label,
                 )
+                self._spawn_dispatch_cache_warmup(i, session_id)
             return
 
         if event_name == "SessionEnd":
@@ -1070,12 +1466,14 @@ class Daemon:
             self.session_ttys.pop(session_id, None)
             self.session_projects.pop(session_id, None)
             self.session_agents.pop(session_id, None)
+            self.session_dispatch_method.pop(session_id, None)
             if i is not None:
                 self._send_pad({"t": "clear", "i": i})
                 events_log.info("MAPPED slot=%s cleared (SessionEnd)", i)
             return
 
         i = self.slots.slot_for(session_id)
+        newly_discovered = i is None
         if i is None:
             # Hook arrived before SessionStart, we're past the pad's
             # slot capacity (self.slots.num_slots — sized from the
@@ -1108,6 +1506,13 @@ class Daemon:
             pane = payload.get("tmux_pane")
             if pane:
                 self.session_panes[session_id] = pane
+
+        # Warm the dispatch cache exactly once, now that this event's
+        # own pane (just above) is factored in too — not inside the
+        # "i is None" branch above, which would miss a pane arriving on
+        # this same event.
+        if newly_discovered:
+            self._spawn_dispatch_cache_warmup(i, session_id)
 
         state = hook_to_state(
             event_name, payload.get("tool_name"), payload.get("notification_type")
@@ -1288,6 +1693,8 @@ class Daemon:
                     pane = _tmux_pane_for_tty(tty)
                     if pane:
                         self.session_panes[session_id] = pane
+
+                self._spawn_dispatch_cache_warmup(i, session_id)
 
                 self._send_pad({"t": "slot", "i": i, "state": "idle", "label": label})
                 events_log.info(

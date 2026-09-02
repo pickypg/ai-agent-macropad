@@ -1,19 +1,19 @@
 // NuPhy Air75 V2 keymap — AI agent session-status pad.
 //
-// Ships 4 physical keys wired by default (PageUp/PageDn/Home/End —
+// Ships 5 physical keys wired by default (Del/PageUp/PageDn/Home/End —
 // the board's right-edge nav column; a small cluster to bring up and
 // verify against real hardware before committing to a bigger one) as
-// AI_AGENT_KEY_0..3, each showing one AI agent session's state via
-// per-key RGB. AI_AGENT_KEY_4..11 exist as valid keycodes but aren't
+// AI_AGENT_KEY_0..4, each showing one AI agent session's state via
+// per-key RGB. AI_AGENT_KEY_5..11 exist as valid keycodes but aren't
 // wired to any physical key here — VIA_ENABLE lets an end user drag
 // them onto spare keys themselves (see ai_agent_macropad.c's dynamic
 // slot/LED discovery, which picks up wherever they end up), though
-// only AI_AGENT_KEY_4..7 are actually reachable from VIA's picker UI
-// today (via.json in this same directory names them "AI Slot 4".."AI
+// only AI_AGENT_KEY_5..7 are actually reachable from VIA's picker UI
+// today (via.json in this same directory names them "AI Slot 5".."AI
 // Slot 7") — the VIA app hard-caps customKeycodes at 32 total entries,
 // and NuPhy's own stock entries plus 2 unavoidable placeholders (see
 // the enum's doc comment below) already use 24 of those, leaving room
-// for exactly 8 (AI_AGENT_KEY_0..7, of which 0..3 are already spoken
+// for exactly 8 (AI_AGENT_KEY_0..7, of which 0..4 are already spoken
 // for by the default wiring). AI_AGENT_KEY_8..11 stay real, working
 // keycodes at the firmware/protocol level (the dynamic scan and
 // process_record_user() code doesn't care about JSON at all) — they're
@@ -59,11 +59,11 @@ enum layers {
 // value range chosen. ai_agent_macropad_keycodes is specific enough to
 // this keymap that it won't run into the same problem again.
 enum ai_agent_macropad_keycodes {
-    AI_AGENT_KEY_0 = QK_KB_0 + 24,  // PageUp position (default)
-    AI_AGENT_KEY_1,               // PageDn position (default)
-    AI_AGENT_KEY_2,               // Home position (default)
-    AI_AGENT_KEY_3,               // End position (default)
-    AI_AGENT_KEY_4,               // unwired by default — VIA-assignable (named in via.json)
+    AI_AGENT_KEY_0 = QK_KB_0 + 24,  // Del position (default)
+    AI_AGENT_KEY_1,               // PageUp position (default)
+    AI_AGENT_KEY_2,               // PageDn position (default)
+    AI_AGENT_KEY_3,               // Home position (default)
+    AI_AGENT_KEY_4,               // End position (default)
     AI_AGENT_KEY_5,               // unwired by default — VIA-assignable (named in via.json)
     AI_AGENT_KEY_6,               // unwired by default — VIA-assignable (named in via.json)
     AI_AGENT_KEY_7,               // unwired by default — VIA-assignable (named in via.json)
@@ -78,11 +78,11 @@ enum ai_agent_macropad_keycodes {
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 [MAC_BASE] = LAYOUT_ansi_84(
-	KC_ESC, 	KC_BRID,  	KC_BRIU,  	MAC_TASK, 	MAC_SEARCH, MAC_VOICE,  MAC_DND,  	KC_MPRV,  	KC_MPLY,  	KC_MNXT, 	KC_MUTE, 	KC_VOLD, 	KC_VOLU, 	MAC_PRTA,	KC_INS,		KC_DEL,
-	KC_GRV, 	KC_1,   	KC_2,   	KC_3,  		KC_4,   	KC_5,   	KC_6,   	KC_7,   	KC_8,   	KC_9,  		KC_0,   	KC_MINS,	KC_EQL, 				KC_BSPC,	AI_AGENT_KEY_0,
-	KC_TAB, 	KC_Q,   	KC_W,   	KC_E,  		KC_R,   	KC_T,   	KC_Y,   	KC_U,   	KC_I,   	KC_O,  		KC_P,   	KC_LBRC,	KC_RBRC, 				KC_BSLS,	AI_AGENT_KEY_1,
-	KC_CAPS,	KC_A,   	KC_S,   	KC_D,  		KC_F,   	KC_G,   	KC_H,   	KC_J,   	KC_K,   	KC_L,  		KC_SCLN,	KC_QUOT, 	 						KC_ENT,		AI_AGENT_KEY_2,
-	KC_LSFT,				KC_Z,   	KC_X,   	KC_C,  		KC_V,   	KC_B,   	KC_N,   	KC_M,   	KC_COMM,	KC_DOT,		KC_SLSH,				KC_RSFT,	KC_UP,		AI_AGENT_KEY_3,
+	KC_ESC, 	KC_BRID,  	KC_BRIU,  	MAC_TASK, 	MAC_SEARCH, MAC_VOICE,  MAC_DND,  	KC_MPRV,  	KC_MPLY,  	KC_MNXT, 	KC_MUTE, 	KC_VOLD, 	KC_VOLU, 	MAC_PRTA,	KC_INS,		AI_AGENT_KEY_0,
+	KC_GRV, 	KC_1,   	KC_2,   	KC_3,  		KC_4,   	KC_5,   	KC_6,   	KC_7,   	KC_8,   	KC_9,  		KC_0,   	KC_MINS,	KC_EQL, 				KC_BSPC,	AI_AGENT_KEY_1,
+	KC_TAB, 	KC_Q,   	KC_W,   	KC_E,  		KC_R,   	KC_T,   	KC_Y,   	KC_U,   	KC_I,   	KC_O,  		KC_P,   	KC_LBRC,	KC_RBRC, 				KC_BSLS,	AI_AGENT_KEY_2,
+	KC_CAPS,	KC_A,   	KC_S,   	KC_D,  		KC_F,   	KC_G,   	KC_H,   	KC_J,   	KC_K,   	KC_L,  		KC_SCLN,	KC_QUOT, 	 						KC_ENT,		AI_AGENT_KEY_3,
+	KC_LSFT,				KC_Z,   	KC_X,   	KC_C,  		KC_V,   	KC_B,   	KC_N,   	KC_M,   	KC_COMM,	KC_DOT,		KC_SLSH,				KC_RSFT,	KC_UP,		AI_AGENT_KEY_4,
 	KC_LCTL,	KC_LALT,	KC_LGUI,										KC_SPC, 							KC_RGUI,	MO(MAC_FN), KC_RCTL,				KC_LEFT,	KC_DOWN,    KC_RGHT),
 
 [MAC_FN] = LAYOUT_ansi_84(
@@ -94,11 +94,11 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 	_______,	_______,	_______,										_______, 							_______,	MO(MAC_FN), _______,				RGB_MOD,	RGB_VAD,    RGB_HUI),
 
 [WIN_BASE] = LAYOUT_ansi_84(
-	KC_ESC, 	KC_F1,  	KC_F2,  	KC_F3, 		KC_F4,  	KC_F5,  	KC_F6,  	KC_F7,  	KC_F8,  	KC_F9, 		KC_F10, 	KC_F11, 	KC_F12, 	KC_PSCR,	KC_INS,		KC_DEL,
-	KC_GRV, 	KC_1,   	KC_2,   	KC_3,  		KC_4,   	KC_5,   	KC_6,   	KC_7,   	KC_8,   	KC_9,  		KC_0,   	KC_MINS,	KC_EQL, 				KC_BSPC,	AI_AGENT_KEY_0,
-	KC_TAB, 	KC_Q,   	KC_W,   	KC_E,  		KC_R,   	KC_T,   	KC_Y,   	KC_U,   	KC_I,   	KC_O,  		KC_P,   	KC_LBRC,	KC_RBRC, 				KC_BSLS,	AI_AGENT_KEY_1,
-	KC_CAPS,	KC_A,   	KC_S,   	KC_D,  		KC_F,   	KC_G,   	KC_H,   	KC_J,   	KC_K,   	KC_L,  		KC_SCLN,	KC_QUOT, 	 						KC_ENT,		AI_AGENT_KEY_2,
-	KC_LSFT,				KC_Z,   	KC_X,   	KC_C,  		KC_V,   	KC_B,   	KC_N,   	KC_M,   	KC_COMM,	KC_DOT,		KC_SLSH,				KC_RSFT,	KC_UP,		AI_AGENT_KEY_3,
+	KC_ESC, 	KC_F1,  	KC_F2,  	KC_F3, 		KC_F4,  	KC_F5,  	KC_F6,  	KC_F7,  	KC_F8,  	KC_F9, 		KC_F10, 	KC_F11, 	KC_F12, 	KC_PSCR,	KC_INS,		AI_AGENT_KEY_0,
+	KC_GRV, 	KC_1,   	KC_2,   	KC_3,  		KC_4,   	KC_5,   	KC_6,   	KC_7,   	KC_8,   	KC_9,  		KC_0,   	KC_MINS,	KC_EQL, 				KC_BSPC,	AI_AGENT_KEY_1,
+	KC_TAB, 	KC_Q,   	KC_W,   	KC_E,  		KC_R,   	KC_T,   	KC_Y,   	KC_U,   	KC_I,   	KC_O,  		KC_P,   	KC_LBRC,	KC_RBRC, 				KC_BSLS,	AI_AGENT_KEY_2,
+	KC_CAPS,	KC_A,   	KC_S,   	KC_D,  		KC_F,   	KC_G,   	KC_H,   	KC_J,   	KC_K,   	KC_L,  		KC_SCLN,	KC_QUOT, 	 						KC_ENT,		AI_AGENT_KEY_3,
+	KC_LSFT,				KC_Z,   	KC_X,   	KC_C,  		KC_V,   	KC_B,   	KC_N,   	KC_M,   	KC_COMM,	KC_DOT,		KC_SLSH,				KC_RSFT,	KC_UP,		AI_AGENT_KEY_4,
 	KC_LCTL,	KC_LGUI,	KC_LALT,										KC_SPC, 							KC_RALT,	MO(WIN_FN), KC_RCTL,				KC_LEFT,	KC_DOWN,    KC_RGHT),
 
 [WIN_FN] = LAYOUT_ansi_84(
@@ -119,13 +119,13 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 };
 
 #ifndef VIA_ENABLE
-// LED index per slot, in AI_AGENT_KEY_0..3 order — read directly off
+// LED index per slot, in AI_AGENT_KEY_0..4 order — read directly off
 // keyboard.json's rgb_matrix.layout array position for each key's
-// matrix cell (PageUp=[1,16], PageDn=[2,16], Home=[1,15], End=[2,15]),
-// confirmed programmatically during Phase 4, not guessed. Slots 4..11
+// matrix cell (Del=[0,14], PageUp=[1,16], PageDn=[2,16], Home=[1,15],
+// End=[2,15]), confirmed programmatically, not guessed. Slots 5..11
 // aren't wired to any physical key without VIA_ENABLE (no way to
 // remap one there), so they stay NO_LED.
-static const uint8_t slot_to_led[NUM_MACROPAD_SLOTS] = {16, 45, 46, 73, NO_LED, NO_LED, NO_LED, NO_LED, NO_LED, NO_LED, NO_LED, NO_LED};
+static const uint8_t slot_to_led[NUM_MACROPAD_SLOTS] = {15, 16, 45, 46, 73, NO_LED, NO_LED, NO_LED, NO_LED, NO_LED, NO_LED, NO_LED};
 #endif
 
 void keyboard_post_init_user(void) {

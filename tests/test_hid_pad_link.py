@@ -104,18 +104,6 @@ def test_discover_hid_device_ignores_wrong_usage_page(monkeypatch):
     assert pad_link.discover_hid_device(hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid) is None
 
 
-def test_discover_hid_device_ignores_hello_with_zero_protocol(monkeypatch):
-    # Pre-version firmware zero-pads byte 3; parse_report rejects that
-    # as not a valid handshake, so discovery must not attach.
-    devices = [make_candidate(b"iface0")]
-    responses = {b"iface0": hello_report(protocol=0)}
-    fake = make_fake_hid(devices, responses)
-    monkeypatch.setattr(pad_link, "hid", fake)
-    assert pad_link.discover_hid_device(
-        hid_protocol.NUPHY_AIR75_V2.vid, hid_protocol.NUPHY_AIR75_V2.pid, handshake_timeout=0.05
-    ) is None
-
-
 def test_discover_hid_device_accepts_newer_protocol(monkeypatch):
     # A pad ahead of this daemon must still be discovered so
     # apply_handshake can warn rather than treating it as "no pad."

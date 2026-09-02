@@ -296,23 +296,23 @@
     },
     {
       "name": "AI\nSlot 0",
-      "title": "AI Agent Slot 0 (PageUp default)"
+      "title": "AI Agent Slot 0 (Del default)"
     },
     {
       "name": "AI\nSlot 1",
-      "title": "AI Agent Slot 1 (PageDn default)"
+      "title": "AI Agent Slot 1 (PageUp default)"
     },
     {
       "name": "AI\nSlot 2",
-      "title": "AI Agent Slot 2 (Home default)"
+      "title": "AI Agent Slot 2 (PageDn default)"
     },
     {
       "name": "AI\nSlot 3",
-      "title": "AI Agent Slot 3 (End default)"
+      "title": "AI Agent Slot 3 (Home default)"
     },
     {
       "name": "AI\nSlot 4",
-      "title": "AI Agent Slot 4"
+      "title": "AI Agent Slot 4 (End default)"
     },
     {
       "name": "AI\nSlot 5",

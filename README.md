@@ -88,7 +88,7 @@ falling back to idle or off, which would look like nothing's wrong.
 This is a fallback rendering behavior, not a state `hook_to_state`
 ever produces on purpose.
 
-**Only tested on macOS.** Window-dispatch (tmux/Terminal.app/VS
+**Only tested on macOS.** Window-dispatch (tmux/Terminal.app/iTerm/VS
 Code/IntelliJ activation) uses AppleScript and is macOS-only outright;
 the rest (daemon, hook.sh, HID protocol) may work elsewhere but hasn't
 been tried.
@@ -553,7 +553,7 @@ together](#how-it-fits-together)). Recognized fields:
 | `tool_name`         | Distinguishes attention-worthy tools (`AskUserQuestion`, `ExitPlanMode`) and labels the slot during `PreToolUse` |
 | `notification_type` | Distinguishes `Notification` subtypes (`agent_needs_input`, `idle_prompt`, `permission_prompt`, ...) — Claude Code and Grok Build only, see [Agents tested](#agents-tested) |
 | `tmux_pane`         | tmux pane id, for the "bring to front" key-press dispatch                                                        |
-| `controlling_tty`   | Terminal.app tty, for the same dispatch when not in tmux                                                         |
+| `controlling_tty`   | Terminal.app/iTerm tty, for the same dispatch when not in tmux                                                   |
 
 `hook_event_name` maps to a display state roughly as:
 
@@ -658,9 +658,11 @@ slot is just `MSG_SLOT` with state `off` (fully dark — distinct from
 A tap is sent as `MSG_KEY` on key-down only (no key-up equivalent) and,
 on the daemon side, logs which session it corresponds to and attempts
 to bring that session's window to the front (tried in order: tmux
-pane, Terminal.app tab by tty, VS Code window by project name,
-IntelliJ IDEA window by project name) — all via AppleScript, so this
-is macOS-only for now.
+pane, Terminal.app tab by tty, iTerm session by tty, a generic
+GUI-app-by-pid fallback for any other terminal emulator with a real
+controlling tty — see `_dispatch_generic_gui` in `daemon.py` — then VS
+Code window by project name, IntelliJ IDEA window by project name) —
+all via AppleScript, so this is macOS-only for now.
 
 Holding a slot key for 5s (`AI_AGENT_MACROPAD_HOLD_THRESHOLD_MS` in
 `ai_agent_macropad.h`) fires `MSG_KEY_HELD` — polled continuously from
