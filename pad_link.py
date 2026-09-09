@@ -1,5 +1,5 @@
 """
-HID connection to a QMK-based pad (e.g. NuPhy Air75 V2, Keychron K1 Pro).
+HID connection to a QMK-based pad (e.g. NuPhy Air75 V2, Keychron K0 Max).
 
 Owns the raw-HID device handle's whole lifecycle: discovery (see
 discover_hid_device()/discover_hid_pad() below), the open connection

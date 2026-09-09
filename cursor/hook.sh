@@ -108,8 +108,7 @@
 #
 # Every point above is now confirmed live per the banner, except the
 # one narrow gap called out in #3 (MCP events) that genuinely couldn't
-# be exercised in this environment — that one still gets the same
-# treatment the README gives the Keychron K1 Pro keymap: documented
+# be exercised in this environment — that one stays documented
 # best-effort, not confirmed working.
 #
 # Fields injected/derived, same "enrich, don't strip" approach as the

@@ -15,15 +15,7 @@ per-key mapping) — the daemon, HID wire protocol, and dispatch logic
 are already keyboard-agnostic; see [QMK keyboard (NuPhy Air75
 V2)](#qmk-keyboard-nuphy-air75-v2) for the pattern to follow.
 
-A second QMK board, the [Keychron K1
-Pro](https://www.keychron.com/products/keychron-k1-pro-qmk-via-wireless-custom-mechanical-keyboard)
-(ANSI), is also wired up, built against Keychron's own official
-firmware source — but **unverified on real hardware**, and needs one
-small source patch applied before it'll build; see [QMK keyboard
-(Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified)
-before relying on it.
-
-A third QMK board, the [Keychron K0
+A second QMK board, the [Keychron K0
 Max](https://www.keychron.com/products/keychron-k0-max-qmk-wireless-custom-number-pad)
 (RGB numpad), is wired up against Keychron's `2025q3` firmware source.
 It has been compiled, flashed, and HID-verified on a live RGB board —
@@ -104,10 +96,10 @@ been tried.
 | `daemon.py`                         | Host-side daemon: Unix socket server + hook-event → pad-state mapping + idle-release orchestration        |
 | `pad_link.py`                       | Owns the HID connection to the pad: discovery, open/close, read/write, reconnection                       |
 | `hid_protocol.py`                   | Wire-level binary report format for the HID transport (QMK-based pads) — see [Protocol](#protocol)        |
-| `Makefile`                          | Repeatable QMK compile: stamps protocol version + QMK-fork/overlay git hashes into the `.bin` name (`make nuphy-air75-v2`, `make keychron-k1-pro`, `make keychron-k0-max`) |
+| `Makefile`                          | Repeatable QMK compile: stamps protocol version + QMK-fork/overlay git hashes into the `.bin` name (`make nuphy-air75-v2`, `make keychron-k0-max`) |
 | `fake_hooks.py`                     | Simulates an agent session's hook events (Claude Code by default, `--agent codex` for Codex's own event shape), for testing the daemon without real hooks wired up |
 | `hid_bringup_test.py`               | Standalone hello/RGB round-trip check against a real QMK pad, independent of `daemon.py`                  |
-| `qmk-userspace/`                    | QMK userspace overlay, built against a separate local QMK checkout — `users/ai_agent_macropad/` holds the protocol/state logic shared by every board's keymap; `keyboards/.../keymaps/ai_agent_macropad/` holds each board's own layout, LED map, and device ID. Keychron boards also ship a small firmware-checkout patch (`k1_pro.c.patch` / `keychron_raw_hid.c.patch`) so the keymap can hook raw HID — see each board's section below |
+| `qmk-userspace/`                    | QMK userspace overlay, built against a separate local QMK checkout — `users/ai_agent_macropad/` holds the protocol/state logic shared by every board's keymap; `keyboards/.../keymaps/ai_agent_macropad/` holds each board's own layout, LED map, and device ID. The Keychron board also ships a small firmware-checkout patch (`keychron_raw_hid.c.patch`) so the keymap can hook raw HID — see that board's section below |
 | `requirements.txt`                  | Python dependencies for the daemon                                                                        |
 | `requirements-dev.txt`              | Adds `pytest` on top of `requirements.txt`, for running the test suite                                    |
 | `tests/`                            | `pytest` suite for `daemon.py`, `pad_link.py`, and `hid_protocol.py` (see [Testing](#testing))             |
@@ -153,11 +145,7 @@ proven on the [NuPhy Air75 V2](https://nuphy.com/products/air75-v2);
 any other QMK board with per-key RGB matrix support (`RGB_MATRIX_ENABLE`)
 should work with a keymap of its own — see [QMK keyboard (NuPhy Air75
 V2)](#qmk-keyboard-nuphy-air75-v2) for the pattern to follow when
-porting to a different board. A [Keychron K1
-Pro](https://www.keychron.com/products/keychron-k1-pro-qmk-via-wireless-custom-mechanical-keyboard)
-(ANSI) keymap is also included, but unverified — see [QMK keyboard
-(Keychron K1 Pro, unverified)](#qmk-keyboard-keychron-k1-pro-unverified).
-A [Keychron K0
+porting to a different board. A [Keychron K0
 Max](https://www.keychron.com/products/keychron-k0-max-qmk-wireless-custom-number-pad)
 RGB numpad keymap is included too, compiled and HID-verified on a live
 board — see [QMK keyboard (Keychron K0 Max)](#qmk-keyboard-keychron-k0-max).
@@ -278,14 +266,12 @@ them, so the color reads as a glow around the keycap rather than
 through it — watch the shape keys from a shallow angle, or turn the
 RGB animation down, if they are hard to read.
 
-This board's firmware lives on Keychron's `2025q3` branch, **not** the
-`wireless_playground` branch used for the K1 Pro — clone it into a
-separate directory so the two checkouts don't collide. `2025q3` already
-defines a strong `via_command_kb()` in
+This board's firmware lives on Keychron's `2025q3` branch, in its own
+checkout separate from the Air75's. `2025q3` already defines a strong
+`via_command_kb()` in
 `keyboards/keychron/common/keychron_raw_hid.c`, so the keymap can't
-hook that symbol itself — apply the small patch below first
-(`raw_hid_receive_kb()` fallthrough, same idea as the K1 Pro patch,
-different file).
+hook that symbol itself — apply the small patch below first, which
+adds a `raw_hid_receive_kb()` fallthrough the keymap can plug into.
 
 ```
 git clone --depth 1 --branch 2025q3 https://github.com/Keychron/qmk_firmware.git ../keychron-qmk-firmware-2025q3
@@ -356,66 +342,6 @@ Load [this board's
 in VIA's Design tab. The HID protocol must run over USB-C; Bluetooth
 and 2.4 GHz will not carry it.
 
-#### QMK keyboard (Keychron K1 Pro, unverified)
-
-**Unverified on real hardware.** Unlike the Air75 keymap above, nobody has built, flashed, or
-tested this one against a real board — treat everything below as a documented best-effort, not
-a confirmed working path. That said, it's built against Keychron's own official firmware source
-(the [`Keychron/qmk_firmware`](https://github.com/Keychron/qmk_firmware) fork, `wireless_playground`
-branch), not a third-party reverse-engineered one — the ANSI layout, matrix, RGB LED indices, and
-VID/PID all come directly from Keychron's real `keyboards/keychron/k1_pro/ansi/rgb/`, and the base
-keymap layers are Keychron's own stock K1 Pro keymap, unmodified except for the 4 AI-slot key
-substitutions. What's unverified is specifically "does it work on a real board" — not "is this
-guessed at."
-
-One small, unavoidable wrinkle: `k1_pro.c` (board-level code, shared by every keymap for this
-board — not something this repo's keymap directory touches) already defines `via_command_kb()`,
-the same raw-HID early-intercept hook the Air75 keymap uses directly, to handle two vendor
-commands (bluetooth DFU, factory test). A keymap can't also define `via_command_kb()` itself —
-duplicate strong symbol, hard link error — so this board needs one small patch applied to that
-file first, adding a new empty-by-default hook (`raw_hid_receive_kb()`) that `via_command_kb()`
-falls through to for anything it doesn't already claim, which is where this keymap's own
-`raw_hid_receive_kb()` (in `keymap.c`) plugs in. The patch is 12 lines, touches nothing any other
-keymap for this board relies on, and ships in this repo as a diff. It's also been submitted
-upstream as [Keychron/qmk_firmware#506](https://github.com/Keychron/qmk_firmware/pull/506) — if
-that gets merged, this manual step goes away for anyone building against a checkout that
-includes it; worth checking before you patch by hand.
-
-```
-git clone --branch wireless_playground https://github.com/Keychron/qmk_firmware.git ../keychron-qmk-firmware
-cd ../keychron-qmk-firmware && git submodule update --init --recursive
-brew install qmk/qmk/qmk    # plus an ARM cross-compiler for this board's STM32L432
-
-git apply ../ai-agent-macropad/qmk-userspace/keyboards/keychron/k1_pro/k1_pro.c.patch
-# (already cd'd into ../keychron-qmk-firmware above — the patch's paths
-# are relative to that repo's root, so no --directory needed here)
-
-cd ../ai-agent-macropad
-make keychron-k1-pro
-# KEYCHRON_QMK=/path/to/keychron-qmk-firmware make keychron-k1-pro
-```
-
-This repo does not flash. Enter bootloader per [Keychron's own
-readme](https://github.com/Keychron/qmk_firmware/blob/wireless_playground/keyboards/keychron/k1_pro/readme.md)
-(USB-C connected, Mac/Win switch **Off**, hold **Esc** or the reset button under the spacebar,
-toggle the switch to **Cable**) and flash the `.bin` with
-[qmk-browser-flasher](https://github.com/pickypg/qmk-browser-flasher).
-
-Then, same as the Air75 board, verify the wire protocol directly before trusting the daemon to
-it — `python3 hid_bringup_test.py` — and only move on once you've watched the real LEDs cycle
-through every state correctly.
-
-Slot wiring, VIA reassignment, and the VIA/daemon exclusivity rule are all the same as [the
-Air75 board above](#qmk-keyboard-nuphy-air75-v2) — same 4 default slots (PageUp/PageDn/Home/End),
-same `ai_agent_macropad`-named keymap directory, same idle-release behavior for VIA access,
-same `via.json`-loading Design-tab step (load
-[this board's `via.json`](qmk-userspace/keyboards/keychron/k1_pro/ansi/rgb/keymaps/ai_agent_macropad/via.json)
-instead, which extends Keychron's own official VIA definition for this board rather than
-replacing it). One difference: this board's 13 stock custom keycodes (left/right Option, left/right
-Cmd, Task View, File Explorer, Screenshot, Cortana, Siri, 3 bluetooth host slots, battery level)
-use up less of VIA's 32-entry `customKeycodes` budget than the Air75 board's 24 do, so all 12
-`AI_AGENT_KEY_0`..`11` slots are nameable ("AI Slot 0".."AI Slot 11"), not just 8 of them.
-
 ### 2. Run the daemon
 
 ```
@@ -428,7 +354,7 @@ python3 daemon.py
 
 The daemon auto-detects the pad (`pad_link.discover_hid_pad()`),
 trying each board in `hid_protocol.KNOWN_HID_PADS` (NuPhy Air75 V2,
-Keychron K0 Max, Keychron K1 Pro) in turn — sending each candidate raw-HID interface a
+Keychron K0 Max) in turn — sending each candidate raw-HID interface a
 ping and attaching to whichever one answers hello first via
 `discover_hid_device()`. No need to look up device paths by hand or
 update them after a replug.
@@ -746,9 +672,6 @@ pad now works end to end:
 - ✅ Keychron K0 Max QMK keymap — compiled, flashed, and HID-verified on a live RGB board
   (`hid_bringup_test.py` cycles the top-row shape keys); see [QMK keyboard (Keychron K0
   Max)](#qmk-keyboard-keychron-k0-max)
-- ⚠️ Keychron K1 Pro (ANSI) QMK keymap — written against Keychron's own official firmware
-  source, unverified on real hardware (see [QMK keyboard (Keychron K1 Pro,
-  unverified)](#qmk-keyboard-keychron-k1-pro-unverified))
 
 ## Prior hardware: Adafruit MacroPad RP2040
 
