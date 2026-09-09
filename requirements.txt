@@ -1,4 +1,4 @@
-# Talks to the pad over USB HID (e.g. NuPhy Air75 V2, Keychron K1 Pro).
+# Talks to the pad over USB HID (e.g. NuPhy Air75 V2, Keychron K0 Max).
 # Also requires the native hidapi library (e.g. `brew install hidapi`
 # on macOS). Without it, daemon.py still runs — it just stays headless,
 # logging what it would send instead of writing to a pad.
