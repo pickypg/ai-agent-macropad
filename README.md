@@ -171,13 +171,17 @@ Follow whichever subsection matches your hardware; the rest of Setup
 
 #### QMK keyboard (NuPhy Air75 V2)
 
-Verified against real hardware. 4 slots wired by default (PageUp/PageDn/Home/End), each
-showing one AI agent session's state via per-key RGB, and pressing one brings that
-session's window to the front (`dispatch_bring_to_front` in `daemon.py`). On boards
+Verified against real hardware. 5 slots wired by default
+(Del/PageUp/PageDn/Home/End), each showing one AI agent session's state via per-key
+RGB, and pressing one brings that session's window to the front
+(`dispatch_bring_to_front` in `daemon.py`). On boards
 built with `VIA_ENABLE` (this one is), up to 8 slots are reachable from the VIA app — drag
-one of the "AI Slot 4".."AI Slot 7" custom keycodes (see `via.json` in the keymap directory)
+one of the "AI Slot 5".."AI Slot 7" custom keycodes (see `via.json` in the keymap directory)
 onto any spare key in the [VIA app](https://www.caniusevia.com/) and it lights up
-automatically; remap a slot key away and its LED goes dark just as automatically. (The shared
+automatically; remap a slot key away and its LED goes dark just as automatically. The
+firmware counts the slot keycodes that are actually on a key and reports that count over
+`MSG_HELLO`, so the host is told 5 by default, 6 once you add one, and 0 if you take them
+all off. (The shared
 firmware actually supports up to 12 slots, but VIA's app hard-caps `customKeycodes` at 32
 total entries, and NuPhy's own stock entries already use most of that budget — see the
 comment above `enum ai_agent_macropad_keycodes` in `keymap.c` for the exact accounting.) The
@@ -266,12 +270,13 @@ as stock, so Bluetooth pairing and lighting still work (M5+0 toggles
 RGB, M5+Num Lock cycles effects). Slot colors overlay whatever
 animation is running. M1–M4 stay stock macros; encoder rotate is
 volume; encoder click is mute. AI_AGENT_KEY_4..11 exist as valid
-keycodes and can be dragged onto spare keys in VIA. Stock legends are
-not shine-through, and the top-row LEDs face up with nothing above
-them, so slot colors are painted on the row below (Num Lock `/` `*`
-`-`) where they catch those keycaps. The shape keys still send the
-slot presses. Num Lock's own indicator shares the first of those four
-LEDs — if slot 0 looks stuck white, Num Lock is on.
+keycodes and can be dragged onto spare keys in VIA; the board reports
+however many are on a key at the time, so adding one makes it 5. Each slot paints
+its own key's LED, the same as every other board here. Stock legends
+are not shine-through and the top-row LEDs face up with nothing above
+them, so the color reads as a glow around the keycap rather than
+through it — watch the shape keys from a shallow angle, or turn the
+RGB animation down, if they are hard to read.
 
 This board's firmware lives on Keychron's `2025q3` branch, **not** the
 `wireless_playground` branch used for the K1 Pro — clone it into a
@@ -320,10 +325,10 @@ readme](https://github.com/Keychron/qmk_firmware/blob/2025q3/keyboards/keychron/
 for the hardware reset location.
 
 Then verify the wire protocol directly —
-`python3 hid_bringup_test.py` — and only move on once the four slot
-LEDs (Num Lock `/` `*` `-`, standing in for the shape keys) cycle
-through every state. Watch those keycaps from above, or the LEDs from
-the side; the shape-key legends are not shine-through.
+`python3 hid_bringup_test.py` — and only move on once the four
+top-row shape keys cycle through every state. Watch them from a
+shallow angle; their legends are not shine-through, so the color
+shows as a glow around the keycap rather than through it.
 
 ##### Troubleshooting (K0 Max)
 
@@ -337,8 +342,6 @@ the side; the shape-key legends are not shine-through.
   M5+Num Lock cycles effects, and the rest of the FN layer adjusts
   brightness / hue / sat / speed. Turn brightness down or pick a
   quieter effect if slots are hard to see.
-- **Slot 0 stuck white.** Num Lock is on; that LED is shared with
-  slot 0's color.
 - **New keymap "didn't take".** VIA EEPROM from a previous flash can
   keep stock Esc/Del/Tab/Bksp on the shape keys. Reset EEPROM in VIA
   or re-assign those four keys to AI Slot 0–3.

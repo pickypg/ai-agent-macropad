@@ -19,6 +19,11 @@
 // for a denser board later.
 #define AI_AGENT_MACROPAD_MAX_SLOTS 12
 
+// Returned by the keycode -> wire index lookup for an AI_AGENT_KEY_*
+// that is not currently on any key. Distinct from any real wire index
+// because MAX_SLOTS is far below it.
+#define AI_AGENT_NO_SLOT 0xFF
+
 // How long a slot key must stay held (ms) before MSG_KEY_HELD fires —
 // see ai_agent_macropad_task(). Deliberately generous: this manually
 // evicts whatever session is mapped to the slot, so it needs to be
@@ -134,10 +139,19 @@ void ai_agent_macropad_scan_slots(uint16_t slot_key_base, uint8_t num_slots);
 void ai_agent_macropad_track_via_remap(uint8_t *data, uint8_t length, uint16_t slot_key_base, uint8_t num_slots);
 #endif
 
-// Override which RGB LED a slot paints after init/scan. `led` is a
-// rgb_matrix index, or NO_LED to stop painting that slot.
+// Override which RGB LED a slot paints after init/scan. `index` is a
+// keycode index (which AI_AGENT_KEY_* this is), `led` an rgb_matrix
+// index or NO_LED to stop painting that slot. Setting one re-derives
+// the wire numbering, so a board's own LED fixup composes with it.
 void ai_agent_macropad_set_slot_led(uint8_t index, uint8_t led);
 uint8_t ai_agent_macropad_get_slot_led(uint8_t index);
+
+// How many slots this board currently answers for: the number of
+// AI_AGENT_KEY_* keycodes that are on a real key, which is what
+// MSG_HELLO reports and the highest MSG_SLOT index it will accept.
+// Changes as the user remaps in VIA. Exposed for boards that want to
+// log or display it; the protocol does not need anyone to call it.
+uint8_t ai_agent_macropad_slot_count(void);
 
 // Call from raw_hid_receive() on boards without VIA_ENABLE, or from
 // via_command_kb() on boards with it (via_command_kb() runs before
