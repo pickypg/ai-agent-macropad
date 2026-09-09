@@ -8,27 +8,85 @@
 #    include "keymap_introspection.h"
 #endif
 
+// -- Two index spaces ------------------------------------------------
+//
+// **Keycode index**: which AI_AGENT_KEY_* a slot belongs to, i.e.
+// `keycode - slot_key_base`. Always 0..num_slots, sparse — the user may
+// have placed only AI Slot 0, 7 and 11 on real keys, leaving the rest
+// on nothing.
+//
+// **Wire index**: what the daemon addresses, and what MSG_HELLO's slot
+// count describes. Dense: those same three become 0, 1, 2.
+//
+// The daemon has no idea which AI_AGENT_KEY_* is behind a wire index,
+// and doesn't need one — it only needs the count to be honest, so that
+// every key it can address lights something. Reporting
+// AI_AGENT_MACROPAD_MAX_SLOTS instead (which every keymap's
+// NUM_MACROPAD_SLOTS is) told a stock 4-key board's daemon it had 12,
+// and the 8 phantom keys silently swallowed everything sent to them.
+//
+// `slot_led` stays in keycode space, because that is what the VIA remap
+// tracking and any board's LED fixup work in. Everything the daemon
+// touches — slot_states, the hold timers, hello, MSG_SLOT, MSG_KEY —
+// is in wire space. rebuild_dense() is the only bridge.
+
+// Wire index -> displayed state.
 static uint8_t slot_states[AI_AGENT_MACROPAD_MAX_SLOTS];
 
-// slot index -> RGB matrix LED index; NO_LED (quantum/rgb_matrix) means
-// no key is currently assigned to that slot. Static tables (non-VIA
-// boards) and the VIA dynamic-keymap scan both funnel into this same
-// array, so ai_agent_macropad_paint_indicators() never needs to care
-// which one populated it.
+// Keycode index -> RGB matrix LED index; NO_LED (quantum/rgb_matrix)
+// means no key is currently assigned to that slot. Static tables
+// (non-VIA boards) and the VIA dynamic-keymap scan both funnel into
+// this same array, so rebuild_dense() never needs to care which one
+// populated it.
 static uint8_t slot_led[AI_AGENT_MACROPAD_MAX_SLOTS];
 
-// slot index -> timer_read() at the most recent press of that slot's key.
+// Wire index -> RGB matrix LED index, and keycode index -> wire index
+// (AI_AGENT_NO_SLOT where that keycode is on no key). Both rebuilt
+// together by rebuild_dense(); dense_count is what MSG_HELLO reports.
+static uint8_t dense_led[AI_AGENT_MACROPAD_MAX_SLOTS];
+static uint8_t dense_of[AI_AGENT_MACROPAD_MAX_SLOTS];
+static uint8_t dense_count;
+
+// Wire index -> timer_read() at the most recent press of that slot's key.
 // key_hold_pending mirrors it: true from press until either the hold
 // threshold fires (ai_agent_macropad_task()) or the key is released,
 // whichever comes first — see both for how they use it together.
 static uint16_t key_down_time[AI_AGENT_MACROPAD_MAX_SLOTS];
 static bool     key_hold_pending[AI_AGENT_MACROPAD_MAX_SLOTS];
 
-void ai_agent_macropad_init(uint8_t num_slots, const uint8_t *slot_to_led) {
-    for (uint8_t i = 0; i < num_slots && i < AI_AGENT_MACROPAD_MAX_SLOTS; i++) {
-        slot_states[i] = STATE_OFF;
-        slot_led[i]    = slot_to_led ? slot_to_led[i] : NO_LED;
+// Recompute the wire view from slot_led. Called at the tail of every
+// place that writes slot_led — including the public setter, so a
+// board's own post-scan LED fixup composes with this for free — and
+// cheap enough (one pass over 12) to run on every VIA keystroke.
+//
+// Deliberately does NOT preserve slot_states across the rebuild: a
+// remap changes which session a wire index refers to, and the daemon
+// resends the truth on its next handshake. Carrying a stale color onto
+// a newly-numbered key would be worse than going dark.
+static void rebuild_dense(void) {
+    dense_count = 0;
+    for (uint8_t i = 0; i < AI_AGENT_MACROPAD_MAX_SLOTS; i++) {
+        dense_of[i] = AI_AGENT_NO_SLOT;
     }
+    for (uint8_t i = 0; i < AI_AGENT_MACROPAD_MAX_SLOTS; i++) {
+        if (slot_led[i] == NO_LED) continue;
+        dense_led[dense_count] = slot_led[i];
+        dense_of[i]            = dense_count;
+        slot_states[dense_count] = STATE_OFF;
+        dense_count++;
+    }
+}
+
+uint8_t ai_agent_macropad_slot_count(void) {
+    return dense_count;
+}
+
+void ai_agent_macropad_init(uint8_t num_slots, const uint8_t *slot_to_led) {
+    for (uint8_t i = 0; i < AI_AGENT_MACROPAD_MAX_SLOTS; i++) {
+        slot_states[i] = STATE_OFF;
+        slot_led[i]    = (slot_to_led && i < num_slots) ? slot_to_led[i] : NO_LED;
+    }
+    rebuild_dense();
 }
 
 #ifdef VIA_ENABLE
@@ -50,6 +108,9 @@ static void set_slot_led_for_keycode(uint16_t slot_key_base, uint8_t num_slots, 
             slot_led[index] = led;
         }
     }
+    // No rebuild_dense() here: rescan_slots() calls this once per matrix
+    // cell and rebuilds once at the end. The single-remap path in
+    // track_via_remap() rebuilds for itself.
 }
 
 static void rescan_slots(uint16_t slot_key_base, uint8_t num_slots, bool from_static_layer) {
@@ -62,6 +123,7 @@ static void rescan_slots(uint16_t slot_key_base, uint8_t num_slots, bool from_st
             set_slot_led_for_keycode(slot_key_base, num_slots, g_led_config.matrix_co[row][col], keycode);
         }
     }
+    rebuild_dense();
 }
 
 void ai_agent_macropad_scan_slots(uint16_t slot_key_base, uint8_t num_slots) {
@@ -82,6 +144,7 @@ void ai_agent_macropad_track_via_remap(uint8_t *data, uint8_t length, uint16_t s
             uint8_t  row = data[2], col = data[3];
             uint16_t new_keycode = ((uint16_t)data[4] << 8) | data[5];
             set_slot_led_for_keycode(slot_key_base, num_slots, g_led_config.matrix_co[row][col], new_keycode);
+            rebuild_dense();
             break;
         }
         case id_dynamic_keymap_reset: {
@@ -101,6 +164,7 @@ void ai_agent_macropad_track_via_remap(uint8_t *data, uint8_t length, uint16_t s
 void ai_agent_macropad_set_slot_led(uint8_t index, uint8_t led) {
     if (index < AI_AGENT_MACROPAD_MAX_SLOTS) {
         slot_led[index] = led;
+        rebuild_dense();
     }
 }
 
@@ -117,10 +181,16 @@ bool ai_agent_macropad_process_record(uint16_t keycode, keyrecord_t *record, uin
     }
 
     // Still swallowed either way — these stay dedicated, inert keys,
-    // never typed. Slot index is the keycode's position past
-    // slot_key_base, valid since the keymap's AI_AGENT_KEY_* enum
-    // values are sequential starting there.
-    uint8_t index = keycode - slot_key_base;
+    // never typed. The keycode's position past slot_key_base is its
+    // keycode index (valid since the keymap's AI_AGENT_KEY_* enum values
+    // are sequential from there); the daemon is told the wire index.
+    uint8_t index = dense_of[keycode - slot_key_base];
+    if (index == AI_AGENT_NO_SLOT) {
+        // Pressed a slot keycode that rebuild_dense() says is on no
+        // key. Shouldn't be reachable, but swallow it rather than
+        // reporting a slot the daemon can't resolve.
+        return false;
+    }
 
     if (record->event.pressed) {
         uint8_t report[AI_AGENT_MACROPAD_REPORT_SIZE] = {0};
@@ -148,7 +218,8 @@ bool ai_agent_macropad_process_record(uint16_t keycode, keyrecord_t *record, uin
 // key_hold_pending is cleared the moment it does, or on release,
 // whichever happens first.
 void ai_agent_macropad_task(uint8_t num_slots) {
-    for (uint8_t i = 0; i < num_slots && i < AI_AGENT_MACROPAD_MAX_SLOTS; i++) {
+    (void)num_slots; // the wire count is what has keys behind it
+    for (uint8_t i = 0; i < dense_count; i++) {
         if (!key_hold_pending[i]) continue;
         if (timer_elapsed(key_down_time[i]) < AI_AGENT_MACROPAD_HOLD_THRESHOLD_MS) continue;
 
@@ -181,7 +252,9 @@ bool ai_agent_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t de
             uint8_t response[AI_AGENT_MACROPAD_REPORT_SIZE] = {0};
             response[0] = MSG_HELLO;
             response[1] = device_id;
-            response[2] = num_slots;
+            // The keys that actually exist right now, not the size of
+            // the keycode enum — see the index-space note up top.
+            response[2] = dense_count;
             response[3] = AI_AGENT_MACROPAD_PROTOCOL_VERSION;
             raw_hid_send(response, sizeof(response));
             return true;
@@ -198,7 +271,7 @@ bool ai_agent_macropad_raw_hid_receive(uint8_t *data, uint8_t length, uint8_t de
             // state_to_rgb() is what decides whether a given value is
             // actually a known case or falls through to the "unknown"
             // fallback color.
-            if (index < num_slots && index < AI_AGENT_MACROPAD_MAX_SLOTS && state <= STATE_OFF) {
+            if (index < dense_count && state <= STATE_OFF) {
                 slot_states[index] = state;
             }
             return true;
@@ -235,6 +308,7 @@ static void state_to_rgb(uint8_t state, uint8_t *r, uint8_t *g, uint8_t *b) {
 // free-running frame timer rather than tracked state, since this runs
 // every RGB matrix tick already.
 void ai_agent_macropad_paint_indicators(uint8_t num_slots) {
+    (void)num_slots;
     bool blink_on = (timer_read32() / 500) % 2 == 0;
 
     // rgb_matrix_set_color() writes the LED buffer directly, bypassing
@@ -243,9 +317,7 @@ void ai_agent_macropad_paint_indicators(uint8_t num_slots) {
     // on the status indicators.
     uint8_t val = rgb_matrix_get_val();
 
-    for (uint8_t i = 0; i < num_slots && i < AI_AGENT_MACROPAD_MAX_SLOTS; i++) {
-        if (slot_led[i] == NO_LED) continue;  // no key currently assigned to this slot
-
+    for (uint8_t i = 0; i < dense_count; i++) {
         uint8_t state = slot_states[i];
         uint8_t r, g, b;
         if ((state == STATE_QUESTION || state == STATE_TOOL_STALLED) && !blink_on) {
@@ -256,6 +328,6 @@ void ai_agent_macropad_paint_indicators(uint8_t num_slots) {
             g = (uint16_t)g * val / 255;
             b = (uint16_t)b * val / 255;
         }
-        rgb_matrix_set_color(slot_led[i], r, g, b);
+        rgb_matrix_set_color(dense_led[i], r, g, b);
     }
 }

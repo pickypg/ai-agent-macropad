@@ -9,10 +9,23 @@
 // (keymaps/keychron/keymap.c), unmodified except:
 //   - the four top-row shape keys (stock Esc / Del / Tab / Bksp,
 //     circle / triangle / square / X in the printed manual) become
-//     AI_AGENT_KEY_0..3. Those keys' own LEDs face up with nothing
-//     above them, so slot colors are painted on the row below
-//     (Num Lock / * -, LED indices 5–8 in led_config.c) where they
-//     catch the keycaps. The shape keys still send the slot presses.
+//     AI_AGENT_KEY_0..3, and paint their state on their own LEDs
+//     (0–3), the way every other board in this repo does.
+//
+//     These keys' LEDs face up with nothing above them, so the color
+//     reads as a glow around the keycap rather than through it. An
+//     earlier version compensated by rewriting slots on LEDs 0–3 to
+//     paint the row below instead (Num Lock / * -, LEDs 5–8), which
+//     cost more than the brightness it bought. It put slot 0 on the
+//     Num Lock LED, fighting that indicator for the color. Worse, it
+//     broke the invariant the VIA remap tracking depends on:
+//     set_slot_led_for_keycode() finds the slot to release by matching
+//     slot_led[] against the real LED of the key being remapped, and
+//     after the rewrite no slot held 0–3 any more. Remapping a shape
+//     key away therefore never released its slot, which went on
+//     painting the row below with stale state while the key's new
+//     owner claimed the same LED. Painting the slot's own key keeps
+//     slot_led[] meaning what the rest of the userspace assumes.
 //   - M1..M4 stay stock macros; M5 stays MO(FN) for Bluetooth pairing
 //     and lighting (stock UG_TOGG / UG_NEXT / etc.).
 // Encoder click is mute; encoder rotate is volume.
@@ -82,18 +95,6 @@ const uint16_t PROGMEM encoder_map[][NUM_ENCODERS][2] = {
 };
 #endif
 
-// Top-row shape keys are LEDs 0–3; the keys in the same columns one
-// row down (Num Lock, /, *, -) are 5–8. Paint there so the color is
-// visible from above. LED 4 is M1, left of Num Lock — not in this map.
-static void k0_max_paint_shape_slots_on_row_below(void) {
-    for (uint8_t i = 0; i < NUM_MACROPAD_SLOTS; i++) {
-        uint8_t led = ai_agent_macropad_get_slot_led(i);
-        if (led <= 3) {
-            ai_agent_macropad_set_slot_led(i, (uint8_t)(led + 5));
-        }
-    }
-}
-
 void keyboard_post_init_user(void) {
     // NULL: a static table can't know where the user has put each key —
     // ai_agent_macropad_scan_slots() (safe here; via_init() already ran
@@ -101,7 +102,6 @@ void keyboard_post_init_user(void) {
     // the live keymap instead.
     ai_agent_macropad_init(NUM_MACROPAD_SLOTS, NULL);
     ai_agent_macropad_scan_slots(AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
-    k0_max_paint_shape_slots_on_row_below();
 }
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
@@ -119,7 +119,6 @@ void matrix_scan_user(void) {
 // via_command_kb / via.c); false lets VIA's normal handling run.
 bool raw_hid_receive_kb(uint8_t *data, uint8_t length) {
     ai_agent_macropad_track_via_remap(data, length, AI_AGENT_KEY_0, NUM_MACROPAD_SLOTS);
-    k0_max_paint_shape_slots_on_row_below();
     return ai_agent_macropad_raw_hid_receive(data, length, DEVICE_ID_K0_MAX, NUM_MACROPAD_SLOTS);
 }
 
